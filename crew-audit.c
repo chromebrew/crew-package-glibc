@@ -37,16 +37,61 @@
 #define CREW_PREFIX "/usr/local"
 #endif
 
-bool verbose = false;
+#ifndef CREW_GLIBC_VERSION
+#define CREW_GLIBC_VERSION "unknown"
+#endif
+
+const char *system_exe_path[] = {
+  "/usr/bin/",
+  "/usr/sbin/",
+  "/bin/",
+  "/sbin/"
+};
+
+const char *system_lib_path[] = {
+  "/usr/lib64",
+  "/lib64",
+  "/usr/lib",
+  "/lib",
+};
+
+bool verbose = false, is_crew_glibc = false, is_system_cmd = false;
 char crew_glibc_prefix[PATH_MAX], crew_libc_so_path[PATH_MAX];
 
 unsigned int la_version(unsigned int interface_ver) {
+  char current_exe[PATH_MAX];
+  int  exe_path_len;
+
   if (strncmp(getenv("CREW_AUDIT_VERBOSE") ?: "0", "1", 1) == 0) verbose = true;
 
   snprintf(crew_glibc_prefix, PATH_MAX, "%s/opt/glibc-libs", CREW_PREFIX);
   snprintf(crew_libc_so_path, PATH_MAX, "%s/libc.so.6", crew_glibc_prefix);
 
   if (verbose) fprintf(stderr, "crew-audit: Initialized on glibc %s with interface version %i\n", gnu_get_libc_version(), interface_ver);
+
+  // check if we are running with glibc-standlone or not by comparing the version
+  if (strcmp(gnu_get_libc_version(), CREW_GLIBC_VERSION) == 0) {
+    if (verbose) fprintf(stderr, "crew-audit: Running with Chromebrew's dynamic linker...\n");
+    is_crew_glibc = true;
+  } else if (verbose) {
+    fprintf(stderr, "crew-audit: Running with ChromeOS's dynamic linker...\n");
+  }
+
+  // get current executable path
+  current_exe[readlink("/proc/self/exe", current_exe, PATH_MAX)] = '\0';
+
+  // check if the current executable path matches prefixes in the system_exe_path[] array
+  for (int i = 0; i < sizeof(system_exe_path) / sizeof(char *); i++) {
+    if (strncmp(current_exe, system_exe_path[i], strlen(system_exe_path[i])) == 0) {
+      // current executable path is a system command
+      is_system_cmd = true;
+      break;
+    }
+  }
+
+  if (verbose && is_system_cmd) {
+    fprintf(stderr, "crew-audit: System command detected, libraries provided by Chromebrew will not be used.\n");
+  }
 
   return LAV_CURRENT;
 }
@@ -59,18 +104,34 @@ char *la_objsearch(const char *soname, uintptr_t *cookie, unsigned int flag) {
 
   if (verbose) fprintf(stderr, "crew-audit: Library %s is being requested...\n", soname);
 
-  if (strcmp(soname, "libC.so.6") == 0) {
-    // replace libC.so.6 requests with libc.so.6
-    if (verbose) fprintf(stderr, "crew-audit: libC.so.6 being requested, replacing it with %s...\n", crew_libc_so_path);
-    return crew_libc_so_path;
-  }
+  if (is_crew_glibc) {
+    if (strcmp(soname, "libC.so.6") == 0) {
+      // replace libC.so.6 requests with libc.so.6
+      if (verbose) fprintf(stderr, "crew-audit: libC.so.6 being requested, replacing it with %s...\n", crew_libc_so_path);
+      return crew_libc_so_path;
+    }
 
-  snprintf(new_path, PATH_MAX, "%s/opt/glibc-libs/%s", CREW_PREFIX, soname);
+    // always search in ${CREW_PREFIX}/opt/glibc-libs first if running with Chromebrew's dynamic linker
+    snprintf(new_path, PATH_MAX, "%s/opt/glibc-libs/%s", CREW_PREFIX, soname);
 
-  // always search in ${CREW_PREFIX}/opt/glibc-libs first
-  if (access(new_path, F_OK) == 0) {
-    if (verbose) fprintf(stderr, "crew-audit: Library found in %s, using it instead...\n", new_path);
-    return new_path;
+    if (access(new_path, F_OK) == 0) {
+      if (verbose) fprintf(stderr, "crew-audit: Library found in %s, using it instead...\n", new_path);
+      return new_path;
+    }
+  } else if (is_system_cmd) {
+    // always search libraries from system path (instead of CREW_LIB_PREFIX) if we are running system commands
+    // see https://github.com/chromebrew/chromebrew/issues/5777 for more info
+    for (int i = 0; i < sizeof(system_lib_path) / sizeof(char *); i++) {
+      snprintf(new_path, PATH_MAX, "%s/%s", system_lib_path[i], soname);
+
+      if (access(new_path, F_OK) == 0) {
+        if (verbose) fprintf(stderr, "crew-audit: Library found in %s, using it instead...\n", new_path);
+        return new_path;
+      }
+    }
+
+    // return NULL if not found
+    return NULL;
   }
 
   // return it as-is if no modification is needed

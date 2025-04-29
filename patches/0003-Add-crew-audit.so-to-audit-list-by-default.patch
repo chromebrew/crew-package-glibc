@@ -1,7 +1,7 @@
 From bb6db2edcefd9a7ebaea1e301c436b814da767a7 Mon Sep 17 00:00:00 2001
 From: SupeChicken666 <me@supechicken666.dev>
 Date: Tue, 29 Apr 2025 17:57:30 +0800
-Subject: [PATCH 3/3] Add crew-audit.so to audit list by default
+Subject: [PATCH 3/4] Add crew-audit.so to audit list by default
 
 Signed-off-by: SupeChicken666 <me@supechicken666.dev>
 ---
