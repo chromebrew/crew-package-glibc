@@ -102,6 +102,9 @@ char *la_objsearch(const char *soname, uintptr_t *cookie, unsigned int flag) {
   // do not modify requests with absolute path
   if (soname[0] == '/') return (char *) soname;
 
+  // do not modify if soname is dynamic linker
+  if (strncmp(soname, "ld-linux", 8) == 0) return (char *) soname;
+
   if (verbose) fprintf(stderr, "crew-audit: Library %s is being requested...\n", soname);
 
   if (is_crew_glibc) {
