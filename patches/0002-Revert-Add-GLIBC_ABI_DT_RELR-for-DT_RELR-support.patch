@@ -1,0 +1,55 @@
+From 135c5b39bb9b0c9b2d33dd2619381fb5d833ce18 Mon Sep 17 00:00:00 2001
+From: Adrian Ratiu <adrian.ratiu@collabora.com>
+Date: Tue, 27 Jun 2023 15:11:47 +0300
+Subject: [PATCH 2/3] Revert "Add GLIBC_ABI_DT_RELR for DT_RELR support"
+
+This partially reverts commit 57292f574156f817b7cbeb33ea62
+
+Adding the GLIBC_ABI_DT_RELR dependency breaks pre-built
+vendor binaries, so we decided to just revert this simple
+check, even though our binutils version supports adding it
+for the binaries we are able to rebuild.
+
+For more details see b:284450929 and CL 4632684
+---
+ elf/dl-version.c | 24 ------------------------
+ 1 file changed, 24 deletions(-)
+
+diff --git a/elf/dl-version.c b/elf/dl-version.c
+index d414bd1e..5208ec88 100644
+--- a/elf/dl-version.c
++++ b/elf/dl-version.c
+@@ -359,30 +359,6 @@ _dl_check_map_versions (struct link_map *map, int verbose, int trace_mode)
+ 	}
+     }
+ 
+-  /* When there is a DT_VERNEED entry with libc.so on DT_NEEDED, issue
+-     an error if there is a DT_RELR entry without GLIBC_ABI_DT_RELR
+-     dependency.  */
+-  if (dyn != NULL
+-      && map->l_info[DT_NEEDED] != NULL
+-      && map->l_info[DT_RELR] != NULL
+-      && __glibc_unlikely (!map->l_dt_relr_ref))
+-    {
+-      const char *strtab = (const void *) D_PTR (map, l_info[DT_STRTAB]);
+-      const ElfW(Dyn) *d;
+-      for (d = map->l_ld; d->d_tag != DT_NULL; ++d)
+-	if (d->d_tag == DT_NEEDED)
+-	  {
+-	    const char *name = strtab + d->d_un.d_val;
+-	    if (strncmp (name, "libc.so.", 8) == 0)
+-	      {
+-		_dl_exception_create
+-		  (&exception, DSO_FILENAME (map->l_name),
+-		   N_("DT_RELR without GLIBC_ABI_DT_RELR dependency"));
+-		goto call_error;
+-	      }
+-	  }
+-    }
+-
+   return result;
+ }
+ 
+-- 
+2.49.0
+

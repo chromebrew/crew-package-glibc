@@ -1,0 +1,27 @@
+From bb6db2edcefd9a7ebaea1e301c436b814da767a7 Mon Sep 17 00:00:00 2001
+From: SupeChicken666 <me@supechicken666.dev>
+Date: Tue, 29 Apr 2025 17:57:30 +0800
+Subject: [PATCH 3/3] Add crew-audit.so to audit list by default
+
+Signed-off-by: SupeChicken666 <me@supechicken666.dev>
+---
+ elf/rtld.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/elf/rtld.c b/elf/rtld.c
+index 00bec153..2d41ed1f 100644
+--- a/elf/rtld.c
++++ b/elf/rtld.c
+@@ -2560,6 +2560,9 @@ process_envvars_default (struct dl_main_state *state)
+   char *envline;
+   char *debug_output = NULL;
+ 
++  /* Add crew-audit.so to audit list by default */
++  if (access(CREW_AUDIT, F_OK) == 0) audit_list_add_string(&state->audit_list, CREW_AUDIT);
++
+   while ((envline = _dl_next_ld_env_entry (&runp)) != NULL)
+     {
+       size_t len = 0;
+-- 
+2.49.0
+

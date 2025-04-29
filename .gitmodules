@@ -1,0 +1,3 @@
+[submodule "glibc"]
+	path = glibc
+	url = https://sourceware.org/git/glibc.git
