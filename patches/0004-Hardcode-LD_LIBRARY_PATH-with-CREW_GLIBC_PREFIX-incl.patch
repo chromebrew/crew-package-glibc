@@ -1,6 +1,6 @@
-From c13a921e90e362531f986e6707dd30023295bc57 Mon Sep 17 00:00:00 2001
+From 432bcb97e21a2b0247fbd1fc9183cc2e1e29ec4f Mon Sep 17 00:00:00 2001
 From: SupeChicken666 <me@supechicken666.dev>
-Date: Tue, 29 Apr 2025 23:10:01 +0800
+Date: Wed, 30 Apr 2025 00:13:59 +0800
 Subject: [PATCH 4/4] Hardcode LD_LIBRARY_PATH with CREW_GLIBC_PREFIX included
 
 Signed-off-by: SupeChicken666 <me@supechicken666.dev>
@@ -9,10 +9,10 @@ Signed-off-by: SupeChicken666 <me@supechicken666.dev>
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/elf/rtld.c b/elf/rtld.c
-index 2d41ed1f..5adfa1a5 100644
+index 00bec153..db5fb5ab 100644
 --- a/elf/rtld.c
 +++ b/elf/rtld.c
-@@ -2650,7 +2650,7 @@ process_envvars_default (struct dl_main_state *state)
+@@ -2647,7 +2647,7 @@ process_envvars_default (struct dl_main_state *state)
  	  /* The library search path.  */
  	  if (memcmp (envline, "LIBRARY_PATH", 12) == 0)
  	    {
