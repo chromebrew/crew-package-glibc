@@ -80,6 +80,13 @@ unsigned int la_version(unsigned int interface_ver) {
   // get current executable path
   current_exe[readlink("/proc/self/exe", current_exe, PATH_MAX)] = '\0';
 
+  // re-execute without LD_AUDIT if the current executable is libc.so.6
+  if (strstr(current_exe, "libc.so.6")) {
+    if (verbose) fprintf(stderr, "crew-audit: libc.so.6 detected, will re-execute with LD_AUDIT unset.\n");
+    unsetenv("LD_AUDIT");
+    execl(current_exe, current_exe, NULL);
+  }
+
   // check if the current executable path matches prefixes in the system_exe_path[] array
   for (int i = 0; i < sizeof(system_exe_path) / sizeof(char *); i++) {
     if (strncmp(current_exe, system_exe_path[i], strlen(system_exe_path[i])) == 0) {
