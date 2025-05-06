@@ -25,7 +25,7 @@
 
   Usage: LD_PRELOAD=crew-preload.so <command>
 
-  cc -O3 -fPIC -shared crew-preload.c -o crew-preload.so
+  cc -O3 -fPIC -shared -DCREW_GLIBC_PREFIX=... -DCREW_GLIBC_INTERPRETER=... crew-preload.c -o crew-preload.so
 */
 
 #define _GNU_SOURCE
@@ -37,6 +37,7 @@
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <string.h>
+#include <spawn.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <linux/limits.h>
@@ -49,15 +50,31 @@
 #define CREW_GLIBC_INTERPRETER "/usr/local/opt/glibc-libs/ld-linux-x86-64.so.2"
 #endif
 
-void init(void) __attribute__((constructor));
-bool verbose = false;
+extern char **environ;
+
+const char *ld_executables[] = {
+  "ld",
+  "ld.bfd",
+  "ld.gold",
+  "ld.lld",
+  "ld.mold",
+  "mold"
+};
+
+bool initialized = false, no_mold = false, verbose = false;
 char glibc_files[128][PATH_MAX];
 int  glibc_file_count = 0;
 
+static int   (*orig_access)(const char *pathname, int mode);
 static int   (*orig_open)(const char *pathname, int flags, mode_t mode);
 static int   (*orig_open64)(const char *pathname, int flags, mode_t mode);
 static FILE* (*orig_fopen)(const char *filename, const char *mode);
 static FILE* (*orig_fopen64)(const char *filename, const char *mode);
+static int   (*orig_execvpe)(const char *file, char *const *argv, char *const *envp);
+static int   (*orig_posix_spawnp)(pid_t *pid, const char *file,
+                                  const posix_spawn_file_actions_t *file_actions,
+                                  const posix_spawnattr_t *attrp,
+                                  char *const *argv, char *const *envp);
 
 void init(void) {
   DIR *dir;
@@ -66,50 +83,15 @@ void init(void) {
   char *filename;
 
   if (strcmp(getenv("CREW_PRELOAD_VERBOSE") ?: "0", "1") == 0) verbose = true;
+  if (strcmp(getenv("CREW_PRELOAD_NO_MOLD") ?: "0", "1") == 0) no_mold = true;
 
-  orig_open    = dlsym(RTLD_NEXT, "open");
-  orig_open64  = dlsym(RTLD_NEXT, "open64");
-  orig_fopen   = dlsym(RTLD_NEXT, "fopen");
-  orig_fopen64 = dlsym(RTLD_NEXT, "fopen64");
-
-  // get current executable path
-  current_exe[readlink("/proc/self/exe", current_exe, PATH_MAX)] = '\0';
-  filename = basename(current_exe);
-
-  if (getenv("CREW_PRELOAD_REPLACED") == NULL && (strcmp(filename, "ld") == 0 || strcmp(filename, "mold") == 0 || strncmp(filename, "ld.", 3) == 0)) {
-    char *cmdline, *argv[1024];
-    int  argc = 0, cmdline_fd, cmdline_len;
-
-    if (verbose) fprintf(stderr, "crew-preload: Current executable is a linker, will re-execute with --dynamic-linker flag\n");
-
-    // read command line arguments
-    cmdline      = malloc(sysconf(_SC_ARG_MAX));
-    cmdline_fd   = open("/proc/self/cmdline", O_RDONLY | O_CLOEXEC);
-    cmdline_len  = read(cmdline_fd, cmdline, sysconf(_SC_ARG_MAX));
-    argv[argc++] = cmdline;
-
-    // parse arguments into an array
-    for (char *p = cmdline; p < cmdline + cmdline_len - 1; p++) {
-      if (*p == '\0') argv[argc++] = p + 1;
-    }
-
-    argv[argc++] = "--dynamic-linker";
-    argv[argc++] = CREW_GLIBC_INTERPRETER;
-    argv[argc]   = NULL;
-
-    setenv("CREW_PRELOAD_REPLACED", "1", true);
-
-    if (strcmp(getenv("CREW_PRELOAD_NO_MOLD") ?: "0", "1") == 0) {
-      if (verbose) fprintf(stderr, "crew-preload: CREW_PRELOAD_NO_MOLD is set, will NOT re-execute as mold linker\n");
-      execv(current_exe, argv);
-    } else {
-      // re-execute current linker arguments with mold
-      if (verbose) fprintf(stderr, "crew-preload: Will re-execute as mold linker\n");
-      execvp("mold", argv);
-    }
-  } else {
-    unsetenv("CREW_PRELOAD_REPLACED");
-  }
+  orig_access       = dlsym(RTLD_NEXT, "access");
+  orig_open         = dlsym(RTLD_NEXT, "open");
+  orig_open64       = dlsym(RTLD_NEXT, "open64");
+  orig_fopen        = dlsym(RTLD_NEXT, "fopen");
+  orig_fopen64      = dlsym(RTLD_NEXT, "fopen64");
+  orig_execvpe      = dlsym(RTLD_NEXT, "execvpe");
+  orig_posix_spawnp = dlsym(RTLD_NEXT, "posix_spawnp");
 
   if ((dir = opendir(CREW_GLIBC_PREFIX)) == NULL) return;
 
@@ -123,21 +105,109 @@ void init(void) {
   }
 
   closedir(dir);
+  initialized = true;
 }
 
 const char *replace_path_if_needed(const char *path) {
   char *filename = basename(path), *new_path;
 
   // hijack file path if needed
-  for (int i = 0; i < glibc_file_count; i++) {
-    if ((strncmp(path, "/usr/local/lib", 14) == 0 || strncmp(path, "/usr/lib", 8) == 0) && strcmp(filename, glibc_files[i]) == 0) {
-      asprintf(&new_path, "%s/%s", CREW_GLIBC_PREFIX, filename);
-      if (verbose) fprintf(stderr, "crew-preload: Replacing %s with %s\n", path, new_path);
-      return new_path;
+  if (strncmp(path, "/usr/local/lib", 14) == 0 || strncmp(path, "/usr/lib", 8) == 0) {
+    for (int i = 0; i < glibc_file_count; i++) {
+      if (strcmp(filename, glibc_files[i]) == 0) {
+        asprintf(&new_path, "%s/%s", CREW_GLIBC_PREFIX, filename);
+        if (verbose) fprintf(stderr, "crew-preload: Replacing %s with %s\n", path, new_path);
+        return new_path;
+      }
     }
   }
 
   return path;
+}
+
+int count_args(va_list argp) {
+  int argc = 0;
+
+  va_list argp_copy;
+  va_copy(argp_copy, argp);
+
+  // count number of arguments
+  while (va_arg(argp_copy, char *)) argc++;
+  va_end(argp_copy);
+
+  return argc;
+}
+
+void va2array(va_list argp, int argc, char **argv) {
+  // copy all arguments into a char array
+  for (int i = 0; i < argc; i++) argv[i] = va_arg(argp, char *);
+  argv[argc] = NULL;
+}
+
+int exec_wrapper(const char *executable, char *const *argv, char *const *envp,
+                 void *pid, const void *file_actions, const void *attrp) {
+  bool is_ld      = false;
+  char **new_argv = alloca(8192 * sizeof(char *)),
+       *filename  = basename(executable);
+  int  argc       = 0;
+
+  if (verbose) {
+    if (pid == NULL) {
+      fprintf(stderr, "crew-preload: exec() called: %s\n", executable);
+    } else {
+      fprintf(stderr, "crew-preload: posix_spawn() called: %s\n", executable);
+    }
+  }
+
+  for (int i = 0; i < sizeof(ld_executables) / sizeof(char *); i++) {
+    if (strcmp(filename, ld_executables[i]) == 0) {
+      is_ld = true;
+      break;
+    }
+  }
+
+  // copy arguments to new array
+  for (; argv[argc] != NULL; argc++) asprintf(&new_argv[argc], argv[argc]);
+  new_argv[argc] = NULL;
+
+  if (is_ld) {
+    const char *final_executable;
+
+    if (strcmp(filename, "mold") != 0 && strcmp(filename, "ld.mold") != 0) {
+      if (no_mold) {
+        if (verbose) fprintf(stderr, "crew-preload: CREW_PRELOAD_NO_MOLD is set, will NOT modify linker path\n");
+        final_executable = executable;
+      } else {
+        if (verbose) fprintf(stderr, "crew-preload: Linker detected (%s), will use mold linker\n", executable);
+        final_executable = "mold";
+      }
+    } else {
+      final_executable = executable;
+    }
+
+    if (verbose) fprintf(stderr, "crew-preload: Appending --dynamic-linker flag to the linker...\n");
+
+    new_argv[argc++] = "--dynamic-linker";
+    new_argv[argc++] = CREW_GLIBC_INTERPRETER;
+    new_argv[argc]   = NULL;
+
+    if (pid == NULL) {
+      return orig_execvpe(final_executable, new_argv, envp);
+    } else {
+      return orig_posix_spawnp((pid_t *) pid, final_executable, (const posix_spawn_file_actions_t *) file_actions,
+                               (const posix_spawnattr_t *) attrp, new_argv, envp);
+    }
+  } else if (pid == NULL) {
+    return orig_execvpe(executable, new_argv, envp);
+  } else {
+    return orig_posix_spawnp((pid_t *) pid, executable, (const posix_spawn_file_actions_t *) file_actions,
+                             (const posix_spawnattr_t *) attrp, new_argv, envp);
+  }
+}
+
+int access(const char *pathname, int mode) {
+  if (!initialized) init();
+  return orig_access(replace_path_if_needed(pathname), mode);
 }
 
 int open(const char *path, int flags, ...) {
@@ -146,6 +216,7 @@ int open(const char *path, int flags, ...) {
   mode_t mode = va_arg(argp, mode_t);
   va_end(argp);
 
+  if (!initialized) init();
   return orig_open(replace_path_if_needed(path), flags, mode);
 }
 
@@ -155,13 +226,104 @@ int open64(const char *path, int flags, ...) {
   mode_t mode = va_arg(argp, mode_t);
   va_end(argp);
 
+  if (!initialized) init();
   return orig_open64(replace_path_if_needed(path), flags, mode);
 }
 
 FILE *fopen(const char *path, const char *mode) {
+  if (!initialized) init();
   return orig_fopen(replace_path_if_needed(path), mode);
 }
 
 FILE *fopen64(const char *path, const char *mode) {
+  if (!initialized) init();
   return orig_fopen64(replace_path_if_needed(path), mode);
+}
+
+int execl(const char *path, const char *arg, ...) {
+  char    **argv;
+  int     argc;
+  va_list argp;
+
+  if (!initialized) init();
+
+  va_start(argp, arg);
+  argc = count_args(argp);
+  argv = alloca(argc * sizeof(char *));
+
+  va2array(argp, argc, argv);
+  va_end(argp);
+
+  return exec_wrapper(path, argv, environ, NULL, NULL, NULL);
+}
+
+int execle(const char *path, const char *arg, ...) {
+  char    **argv;
+  int     argc;
+  va_list argp;
+
+  if (!initialized) init();
+
+  va_start(argp, arg);
+  argc = count_args(argp);
+  argv = alloca(argc * sizeof(char *));
+
+  va2array(argp, argc, argv);
+  va_end(argp);
+
+  return exec_wrapper(path, argv, environ, NULL, NULL, NULL);
+}
+
+int execlp(const char *path, const char *arg, ...) {
+  char    **argv, **envp;
+  int     argc;
+  va_list argp;
+
+  if (!initialized) init();
+
+  va_start(argp, arg);
+  argc = count_args(argp);
+  argv = alloca(argc * sizeof(char *));
+
+  va2array(argp, argc, argv);
+  envp = va_arg(argp, char **);
+  va_end(argp);
+
+  return exec_wrapper(path, argv, envp, NULL, NULL, NULL);
+}
+
+int execv(const char *path, char *const *argv) {
+  if (!initialized) init();
+  return exec_wrapper(path, argv, environ, NULL, NULL, NULL);
+}
+
+int execve(const char *path, char *const *argv, char *const *envp) {
+  if (!initialized) init();
+  return exec_wrapper(path, argv, envp, NULL, NULL, NULL);
+}
+
+int execvp(const char *file, char *const *argv) {
+  if (!initialized) init();
+  return exec_wrapper(file, argv, environ, NULL, NULL, NULL);
+}
+
+int execvpe(const char *file, char *const *argv, char *const *envp) {
+  if (!initialized) init();
+  return exec_wrapper(file, argv, envp, NULL, NULL, NULL);
+}
+
+int posix_spawn(pid_t *pid, const char *path,
+                const posix_spawn_file_actions_t *file_actions,
+                const posix_spawnattr_t *attrp,
+                char *const *argv, char *const *envp) {
+  if (!initialized) init();
+  return exec_wrapper(path, argv, envp, pid, file_actions, attrp);
+}
+
+int posix_spawnp(pid_t *pid, const char *file,
+                 const posix_spawn_file_actions_t *file_actions,
+                 const posix_spawnattr_t *attrp,
+                 char *const *argv, char *const *envp) {
+  if (!initialized) init();
+  return exec_wrapper(file, argv, envp, pid, file_actions, attrp);
 }
