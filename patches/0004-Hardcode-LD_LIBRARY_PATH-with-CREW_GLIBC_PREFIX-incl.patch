@@ -1,7 +1,7 @@
-From 432bcb97e21a2b0247fbd1fc9183cc2e1e29ec4f Mon Sep 17 00:00:00 2001
+From 388cf65f107882302ae4959b4db2d3337d4bf3c8 Mon Sep 17 00:00:00 2001
 From: SupeChicken666 <me@supechicken666.dev>
 Date: Wed, 30 Apr 2025 00:13:59 +0800
-Subject: [PATCH 4/4] Hardcode LD_LIBRARY_PATH with CREW_GLIBC_PREFIX included
+Subject: [PATCH 4/5] Hardcode LD_LIBRARY_PATH with CREW_GLIBC_PREFIX included
 
 Signed-off-by: SupeChicken666 <me@supechicken666.dev>
 ---

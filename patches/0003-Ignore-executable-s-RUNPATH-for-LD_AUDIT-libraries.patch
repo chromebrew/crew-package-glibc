@@ -1,7 +1,7 @@
-From 23ebe7d94404490fe74e2cb5a36d4009a70ff090 Mon Sep 17 00:00:00 2001
+From b1a3df05f350359ce9e94f46fcc539c46d8e7908 Mon Sep 17 00:00:00 2001
 From: SupeChicken666 <me@supechicken666.dev>
 Date: Wed, 30 Apr 2025 00:06:26 +0800
-Subject: [PATCH 3/4] Ignore executable's RUNPATH for LD_AUDIT libraries
+Subject: [PATCH 3/5] Ignore executable's RUNPATH for LD_AUDIT libraries
 
 Signed-off-by: SupeChicken666 <me@supechicken666.dev>
 ---

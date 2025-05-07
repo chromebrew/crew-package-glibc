@@ -1,0 +1,23 @@
+From 2bf7904ecfd099a333a24cefb96ed61d71596196 Mon Sep 17 00:00:00 2001
+From: SupeChicken666 <me@supechicken666.dev>
+Date: Wed, 7 May 2025 17:24:57 +0800
+Subject: [PATCH 5/5] Add identifier to release string
+
+Signed-off-by: SupeChicken666 <me@supechicken666.dev>
+---
+ version.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/version.h b/version.h
+index 639cb34a..6c8c016f 100644
+--- a/version.h
++++ b/version.h
+@@ -1,4 +1,4 @@
+ /* This file just defines the current version number of libc.  */
+ 
+-#define RELEASE "stable"
++#define RELEASE "stable-chromebrew"
+ #define VERSION "2.41"
+-- 
+2.49.0
+

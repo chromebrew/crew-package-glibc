@@ -20,7 +20,7 @@
 
   Usage: LD_AUDIT=crew-audit.so [CREW_AUDIT_VERBOSE=1] <command>
 
-  cc -O3 -fPIC -shared crew-audit.c -o crew-audit.so
+  cc -O3 -fPIC -shared -DCREW_PREFIX=... crew-audit.c -o crew-audit.so
 */
 
 #define _GNU_SOURCE
@@ -35,10 +35,6 @@
 
 #ifndef CREW_PREFIX
 #define CREW_PREFIX "/usr/local"
-#endif
-
-#ifndef CREW_GLIBC_VERSION
-#define CREW_GLIBC_VERSION "unknown"
 #endif
 
 const char *system_exe_path[] = {
@@ -69,8 +65,8 @@ unsigned int la_version(unsigned int interface_ver) {
 
   if (verbose) fprintf(stderr, "crew-audit: Initialized on glibc %s with interface version %i\n", gnu_get_libc_version(), interface_ver);
 
-  // check if we are running with glibc-standlone or not by comparing the version
-  if (strcmp(gnu_get_libc_version(), CREW_GLIBC_VERSION) == 0) {
+  // check if we are running with glibc-standlone or not
+  if (strcmp(gnu_get_libc_release(), "stable-chromebrew") == 0) {
     if (verbose) fprintf(stderr, "crew-audit: Running with Chromebrew's dynamic linker...\n");
     is_crew_glibc = true;
   } else if (verbose) {

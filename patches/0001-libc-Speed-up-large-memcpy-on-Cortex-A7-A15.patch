@@ -1,7 +1,7 @@
-From 8611480aeeefb3c52f124079fa5e946e831db27d Mon Sep 17 00:00:00 2001
+From 7ad505b6e9e870941a0976d418c382bc226ff3ea Mon Sep 17 00:00:00 2001
 From: Yunlian Jiang <yunlian@google.com>
 Date: Fri, 1 Aug 2014 15:19:34 -0700
-Subject: [PATCH 1/4] libc: Speed up large memcpy() on Cortex-A7/A15
+Subject: [PATCH 1/5] libc: Speed up large memcpy() on Cortex-A7/A15
 
 Details please see crbug://331427
 
