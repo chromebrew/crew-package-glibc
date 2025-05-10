@@ -167,7 +167,7 @@ int exec_wrapper(const char *executable, char *const *argv, char *const *envp,
   }
 
   // copy arguments to new array
-  for (; argv[argc] != NULL; argc++) asprintf(&new_argv[argc], argv[argc]);
+  for (; argv[argc] != NULL; argc++) asprintf(&new_argv[argc], "%s", argv[argc]);
   new_argv[argc] = NULL;
 
   if (is_ld) {
