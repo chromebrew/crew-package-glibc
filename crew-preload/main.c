@@ -176,13 +176,17 @@ int copy2array(char * const* src, char **dest, int offset) {
 }
 
 int search_in_path(const char *file, char *result) {
-  int  return_value = ENOENT;
-  char cs_path[PATH_MAX * 100], *path_env, *search_path;
+  const char *path_env;
+  char       cs_path[PATH_MAX * 32], strtok_buf[PATH_MAX], *search_path;
+  int        return_value;
 
   confstr(_CS_PATH, cs_path, sizeof(cs_path));
 
-  path_env    = getenv("PATH") ?: cs_path,
-  search_path = strtok(path_env, ":");
+  return_value = ENOENT;
+  path_env     = getenv("PATH") ?: cs_path;
+
+  strncpy(strtok_buf, path_env, PATH_MAX);
+  search_path = strtok(strtok_buf, ":");
 
   do {
     snprintf(result, PATH_MAX, "%s/%s", search_path, file);
@@ -225,7 +229,7 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
   char    **new_argv  = alloca(8192 * sizeof(char *)),
           *filename   = basename(path_or_name),
           *read_buf   = alloca(PATH_MAX),
-          *final_exec = (char *) path_or_name;
+          *final_exec = alloca(PATH_MAX);
   int     argc        = 0;
 
   if (verbose) {
@@ -256,7 +260,9 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
   }
 
   // search in path if perform_path_search == true and path_or_name is not a relative or absolute path
-  if (!is_a_path) {
+  if (is_a_path) {
+    strncpy(final_exec, path_or_name, PATH_MAX);
+  } else {
     int ret = search_in_path(path_or_name, final_exec);
     if (ret != 0) return ret;
   }
@@ -279,8 +285,9 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
 
       if (orig_access(new_path, X_OK) == 0) {
         if (verbose) fprintf(stderr, "crew-preload: Shell detected (%s), will use Chromebrew version of %s instead\n", final_exec, filename);
-        is_system  = false;
-        final_exec = new_path;
+
+        is_system = false;
+        strncpy(final_exec, new_path, PATH_MAX);
       }
     }
   }
@@ -298,14 +305,21 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
       return ENOENT;
     }
   } else if (is_system && is_dynamic_executable(final_exec)) {
+    char orig_exec_path[PATH_MAX];
+
+    strncpy(orig_exec_path, final_exec, PATH_MAX);
+    strncpy(final_exec, SYSTEM_GLIBC_INTERPRETER, PATH_MAX);
+
     // run system commands with "ld.so --library-path '' <actual command>"
     new_argv[0] = "ld.so";
     new_argv[1] = "--library-path";
     new_argv[2] = "";
-    new_argv[3] = final_exec;
-    final_exec  = SYSTEM_GLIBC_INTERPRETER;
+    new_argv[3] = orig_exec_path;
 
-    if (verbose) fprintf(stderr, "crew-preload: System command detected, will execute with LD_LIBRARY_PATH unset...\n");
+    if (verbose) {
+      fprintf(stderr, "crew-preload: System command detected, will execute with LD_LIBRARY_PATH unset...\n");
+      fprintf(stderr, "crew-preload: Will re-execute as: %s %s \"\" %s ...\n", new_argv[0], new_argv[1], new_argv[3]);
+    }
 
     copy2array(argv + 1, new_argv, 4);
   }
@@ -318,6 +332,10 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
   FILE *exec_fp = fopen(final_exec, "re");
 
   if (fread(read_buf, 2, 1, exec_fp) == 1 && memcmp(read_buf, "#!", 2) == 0) {
+    char script_path[PATH_MAX];
+
+    strncpy(script_path, final_exec, PATH_MAX);
+
     // get shebang value
     fgets(read_buf, PATH_MAX, exec_fp);
     read_buf[strchr(read_buf, '\n') - read_buf] = '\0'; // remove newline
@@ -325,10 +343,12 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
     if (verbose) fprintf(stderr, "crew-preload: %s is a script with shebang: '#!%s'\n", final_exec, read_buf);
 
     // extract interpreter path and interpreter argument (if any)
-    final_exec  = strtok(read_buf, " ");
+    strncpy(final_exec, strtok(read_buf, " "), PATH_MAX);
+
     new_argv[0] = final_exec;
-    new_argv[1] = strtok(NULL, "\0");
-    argc        = copy2array(argv, new_argv, (new_argv[1] == NULL) ? 1 : 2);
+    new_argv[1] = strtok(NULL, "\0") ?: script_path;
+    new_argv[2] = script_path;
+    argc        = copy2array(&argv[1], new_argv, (new_argv[1] == NULL) ? 2 : 3); // copy all arguments except argv[0]
 
     if (verbose) fprintf(stderr, "crew-preload: Will re-execute as: %s %s %s ...\n", new_argv[0], new_argv[1], new_argv[2]);
 
@@ -355,7 +375,7 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
         int ret = search_in_path("mold", mold_exec);
 
         if (ret == 0) {
-          final_exec = mold_exec;
+          strncpy(final_exec, mold_exec, PATH_MAX);
         } else {
           fprintf(stderr, "crew-preload: Mold linker is not executable (%s), will NOT modify linker path\n", strerror(ret));
         };
