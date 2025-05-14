@@ -130,6 +130,7 @@ void init(void) {
 }
 
 void replace_path_if_needed(const char *orig_path, char *final_path) {
+  // replace_path_if_needed(): redirect file path to CREW_GLIBC_PREFIX if necessary
   char *filename = basename(orig_path);
 
   // hijack file path if needed
@@ -167,6 +168,7 @@ void va2array(va_list argp, int argc, char **argv) {
 }
 
 int copy2array(char * const* src, char **dest, int offset) {
+  // copy2array(): copy all elements from src[i] to dest[offset + i]
   int i;
 
   for (i = 0; src[i] != NULL; i++) asprintf(&dest[offset + i], "%s", src[i]);
@@ -176,6 +178,8 @@ int copy2array(char * const* src, char **dest, int offset) {
 }
 
 int search_in_path(const char *file, char *result) {
+  // search_in_path: search given filename in PATH environment variable,
+  //                 full path will be written to the memory address that is pointed by the `result` pointer
   const char *path_env;
   char       cs_path[PATH_MAX * 32], strtok_buf[PATH_MAX], *search_path;
   int        return_value;
@@ -207,6 +211,7 @@ int search_in_path(const char *file, char *result) {
 }
 
 bool is_dynamic_executable(char *pathname) {
+  // is_dymanic_executable(): Check whether the given file is a dynamically linked ELF executable
   char *argv[] = { "ld.so", "--verify", pathname, NULL };
   int pid, status;
 
@@ -348,7 +353,7 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
     new_argv[0] = final_exec;
     new_argv[1] = strtok(NULL, "\0") ?: script_path;
     new_argv[2] = script_path;
-    argc        = copy2array(&argv[1], new_argv, (new_argv[1] == NULL) ? 2 : 3); // copy all arguments except argv[0]
+    argc        = copy2array(&argv[1], new_argv, (new_argv[2] == NULL) ? 2 : 3); // copy all arguments except argv[0]
 
     if (verbose) fprintf(stderr, "crew-preload: Will re-execute as: %s %s %s ...\n", new_argv[0], new_argv[1], new_argv[2]);
 

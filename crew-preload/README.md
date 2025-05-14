@@ -22,6 +22,14 @@ If `CREW_PRELOAD_ENABLE_COMPILE_HACKS` is set, this wrapper will also:
   - Append `--dynamic-linker` flag to linker commend
   - Replace linker command with `mold` (can be disabled with `CREW_PRELOAD_NO_MOLD`)
 
+### Available environment variables
+|Name                               |Description                                   |
+|:----------------------------------|:---------------------------------------------|
+|`CREW_PRELOAD_VERBOSE`             |Enable verbose logging                        |
+|`CREW_PRELOAD_ENABLE_COMPILE_HACKS`|Enable hacks that help compile (see above)    |
+|`CREW_PRELOAD_NO_CREW_SHELL`       |Do not rewrite shell path to Chromebrew's one |
+|`CREW_PRELOAD_NO_MOLD`             |Do not rewrite linker program to `mold`       |
+
 ### Usage
 ```shell
 cc -O3 -fPIC -shared \
