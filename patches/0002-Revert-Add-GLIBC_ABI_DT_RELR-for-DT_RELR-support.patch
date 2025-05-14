@@ -1,7 +1,7 @@
-From 70a88c6be27c48a19059f940c437c23149a05ef4 Mon Sep 17 00:00:00 2001
+From 585bbba361c27755a3db2cac7cc2def2268aa396 Mon Sep 17 00:00:00 2001
 From: Adrian Ratiu <adrian.ratiu@collabora.com>
 Date: Tue, 27 Jun 2023 15:11:47 +0300
-Subject: [PATCH 2/5] Revert "Add GLIBC_ABI_DT_RELR for DT_RELR support"
+Subject: [PATCH 2/3] Revert "Add GLIBC_ABI_DT_RELR for DT_RELR support"
 
 This partially reverts commit 57292f574156f817b7cbeb33ea62
 
