@@ -28,14 +28,12 @@
 
 extern char **environ;
 
-extern bool initialized, compile_hacks, no_crew_shell, no_mold, verbose;
+extern bool initialized;
 
 void init(void);
 int  count_args(va_list argp);
 void va2array(va_list argp, int argc, char **argv);
 int  copy2array(char * const* src, char **dest, int offset);
-int  search_in_path(const char *file, char *result);
-bool is_dynamic_executable(char *pathname);
 int  exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
                   bool perform_path_search, void *pid, const void *file_actions, const void *attrp);
 

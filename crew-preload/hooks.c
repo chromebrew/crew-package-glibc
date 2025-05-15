@@ -9,6 +9,22 @@
 
 #include "./main.h"
 
+__attribute__ ((visibility("default"))) int execl(const char *path, const char *arg, ...);
+__attribute__ ((visibility("default"))) int execle(const char *path, const char *arg, ...);
+__attribute__ ((visibility("default"))) int execlp(const char *path, const char *arg, ...);
+__attribute__ ((visibility("default"))) int execv(const char *path, char *const *argv);
+__attribute__ ((visibility("default"))) int execve(const char *path, char *const *argv, char *const *envp);
+__attribute__ ((visibility("default"))) int execvp(const char *file, char *const *argv);
+__attribute__ ((visibility("default"))) int execvpe(const char *file, char *const *argv, char *const *envp);
+__attribute__ ((visibility("default"))) int posix_spawn(pid_t *pid, const char *path,
+                                                        const posix_spawn_file_actions_t *file_actions,
+                                                        const posix_spawnattr_t *attrp,
+                                                        char *const *argv, char *const *envp);
+__attribute__ ((visibility("default"))) int posix_spawnp(pid_t *pid, const char *file,
+                                                         const posix_spawn_file_actions_t *file_actions,
+                                                         const posix_spawnattr_t *attrp,
+                                                         char *const *argv, char *const *envp);
+
 int execl(const char *path, const char *arg, ...) {
   char    **argv;
   int     argc;

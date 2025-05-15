@@ -29,7 +29,7 @@
 
   Usage: LD_PRELOAD=crew-preload.so <command>
 
-  cc -O3 -fPIC -shared -DCREW_PREFIX=\"...\" -DCREW_GLIBC_PREFIX=\"...\" \
+  cc -O3 -fPIC -shared -fvisibility=hidden -DCREW_PREFIX=\"...\" -DCREW_GLIBC_PREFIX=\"...\" \
     -DCREW_GLIBC_INTERPRETER=\"...\" -DSYSTEM_GLIBC_INTERPRETER=\"...\" \
     crew-preload.c -o crew-preload.so
 */
@@ -52,11 +52,12 @@
 #define SYSTEM_GLIBC_INTERPRETER "/lib64/ld-linux-x86-64.so.2"
 #endif
 
-bool initialized   = false,
-     compile_hacks = false,
-     no_crew_shell = false,
-     no_mold       = false,
-     verbose       = false;
+bool compile_hacks           = false,
+     initialized             = false,
+     lib_path_restore_needed = false,
+     no_crew_shell           = false,
+     no_mold                 = false,
+     verbose                 = false;
 
 const char *linkers[] = {
   "ld",
@@ -81,15 +82,11 @@ static int (*orig_posix_spawn)(pid_t *pid, const char *pathname,
                                char *const *argv, char *const *envp);
 
 void init(void) {
-  DIR *dir;
-  struct dirent *entry;
-  char current_exe[PATH_MAX];
-  char *filename;
-
-  if (strcmp(getenv("CREW_PRELOAD_VERBOSE") ?: "0", "1") == 0)              verbose       = true;
-  if (strcmp(getenv("CREW_PRELOAD_ENABLE_COMPILE_HACKS") ?: "0", "1") == 0) compile_hacks = true;
-  if (strcmp(getenv("CREW_PRELOAD_NO_CREW_SHELL") ?: "0", "1") == 0)        no_crew_shell = true;
-  if (strcmp(getenv("CREW_PRELOAD_NO_MOLD") ?: "0", "1") == 0)              no_mold       = true;
+  if (strcmp(getenv("CREW_PRELOAD_ENABLE_COMPILE_HACKS") ?: "0", "1") == 0) compile_hacks           = true;
+  if (strcmp(getenv("CREW_PRELOAD_LIB_PATH_MODIFIED") ?: "0", "1") == 0)    lib_path_restore_needed = true;
+  if (strcmp(getenv("CREW_PRELOAD_NO_CREW_SHELL") ?: "0", "1") == 0)        no_crew_shell           = true;
+  if (strcmp(getenv("CREW_PRELOAD_NO_MOLD") ?: "0", "1") == 0)              no_mold                 = true;
+  if (strcmp(getenv("CREW_PRELOAD_VERBOSE") ?: "0", "1") == 0)              verbose                 = true;
 
   orig_execve      = dlsym(RTLD_NEXT, "execve");
   orig_posix_spawn = dlsym(RTLD_NEXT, "posix_spawn");
@@ -153,7 +150,7 @@ int search_in_path(const char *file, char *result) {
       // file found in path but it is not executable
       return_value = EACCES;
     }
-  } while (search_path = strtok(NULL, ":"));
+  } while ((search_path = strtok(NULL, ":")));
 
   return return_value;
 }
@@ -174,17 +171,36 @@ bool is_dynamic_executable(char *pathname) {
   }
 }
 
+void unsetenvfp(char **envp, char *name) {
+  // unsetenvfp(): delete a specific environment variable from given envp
+  int name_len = strlen(name);
+
+  for (int i = 0; envp[i]; i++) {
+    if (strncmp(envp[i], name, name_len) == 0) {
+      // delete corresponding index from envp if found
+      int j;
+
+      for (j = i; envp[j + 1]; j++) envp[j] = envp[j + 1];
+      envp[j - 1] = NULL;
+
+      return;
+    }
+  }
+};
+
 int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
                  bool perform_path_search, void *pid, const void *file_actions, const void *attrp) {
-  bool    is_compiler = false,
-          is_linker   = false,
+  bool    is_linker   = false,
           is_system   = false,
           is_a_path   = false;
-  char    **new_argv  = alloca(8192 * sizeof(char *)),
+  char    **new_argv  = alloca(4096 * sizeof(char *)),
+          **new_envp  = alloca(4096 * sizeof(char *)),
           *filename   = basename(path_or_name),
           *read_buf   = alloca(PATH_MAX),
           *final_exec = alloca(PATH_MAX);
-  int     argc        = 0;
+  int     argc        = copy2array(argv, new_argv, 0),
+          envc        = copy2array(envp, new_envp, 0);
+  FILE    *exec_fp;
 
   if (verbose) {
     if (pid == NULL) {
@@ -201,9 +217,6 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
       }
     }
   }
-
-  // copy arguments to new array
-  argc = copy2array(argv, new_argv, 0);
 
   // check if path_or_name is a relative or absolute path
   if (!perform_path_search || access(path_or_name, F_OK) == 0 ||
@@ -222,7 +235,7 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
   }
 
   // check if executable is a system command or not
-  for (int i = 0; i < sizeof(system_exe_path) / sizeof(char *); i++) {
+  for (int i = 0; i < (int) (sizeof(system_exe_path) / sizeof(char *)); i++) {
     if (strncmp(final_exec, system_exe_path[i], strlen(system_exe_path[i])) == 0) {
       is_system = true;
       break;
@@ -232,7 +245,7 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
   // always use Chromebrew version of shell (at ${CREW_PREFIX}/bin/{bash,sh}) when /bin/sh or /bin/bash is called
   if (strcmp(final_exec, "/bin/sh") == 0 || strcmp(final_exec, "/bin/bash") == 0) {
     if (no_crew_shell) {
-      if (verbose) fprintf(stderr, "crew-preload: CREW_PRELOAD_NO_CREW_SHELL set, will NOT modify shell path\n", final_exec, filename);
+      if (verbose) fprintf(stderr, "crew-preload: CREW_PRELOAD_NO_CREW_SHELL set, will NOT modify shell path\n");
     } else {
       char new_path[PATH_MAX];
       snprintf(new_path, PATH_MAX, "%s%s", CREW_PREFIX, final_exec);
@@ -259,23 +272,28 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
       return ENOENT;
     }
   } else if (is_system && is_dynamic_executable(final_exec)) {
-    char orig_exec_path[PATH_MAX];
+    // unset LD_LIBRARY_PATH for system commands, original value will be copied into CREW_PRELOAD_LIBRARY_PATH environment variable
+    // (see https://github.com/chromebrew/chromebrew/issues/5777 for more information)
+    if (verbose) fprintf(stderr, "crew-preload: System command detected, will execute with LD_LIBRARY_PATH unset...\n");
 
-    strncpy(orig_exec_path, final_exec, PATH_MAX);
-    strncpy(final_exec, SYSTEM_GLIBC_INTERPRETER, PATH_MAX);
+    if (!lib_path_restore_needed) {
+      asprintf(&new_envp[envc++], "CREW_PRELOAD_LIBRARY_PATH=%s", getenv("LD_LIBRARY_PATH"));
 
-    // run system commands with "ld.so --library-path '' <actual command>"
-    new_argv[0] = "ld.so";
-    new_argv[1] = "--library-path";
-    new_argv[2] = "";
-    new_argv[3] = orig_exec_path;
-
-    if (verbose) {
-      fprintf(stderr, "crew-preload: System command detected, will execute with LD_LIBRARY_PATH unset...\n");
-      fprintf(stderr, "crew-preload: Will re-execute as: %s %s \"\" %s ...\n", new_argv[0], new_argv[1], new_argv[3]);
+      new_envp[envc++] = "CREW_PRELOAD_LIB_PATH_MODIFIED=1";
+      new_envp[envc]   = NULL;
     }
+  } else if (!is_system && lib_path_restore_needed) {
+    // restore LD_LIBRARY_PATH from CREW_PRELOAD_LIBRARY_PATH if it was unset previously by LD_PRELOAD in the parent process
+    char *library_path = getenv("CREW_PRELOAD_LIBRARY_PATH");
 
-    copy2array(argv + 1, new_argv, 4);
+    if (library_path) {
+      if (verbose) fprintf(stderr, "crew-preload: LD_LIBRARY_PATH restored (%s)\n", library_path);
+
+      asprintf(&new_envp[argc++], "LD_LIBRARY_PATH=%s", library_path);
+
+      unsetenvfp(new_envp, "CREW_PRELOAD_LIBRARY_PATH");
+      unsetenvfp(new_envp, "CREW_PRELOAD_LIB_PATH_MODIFIED");
+    }
   }
 
   // check for permission first, raise an error if the executable isn't executable
@@ -283,9 +301,11 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
   if (access(final_exec, X_OK) != 0) return EACCES;
 
   // parse shebang and re-execute with specified interpreter if the executable is a script
-  FILE *exec_fp = fopen(final_exec, "re");
+  exec_fp = fopen(final_exec, "re");
 
-  if (fread(read_buf, 2, 1, exec_fp) == 1 && memcmp(read_buf, "#!", 2) == 0) {
+  if (!exec_fp) {
+    if (verbose) fprintf(stderr, "crew-preload: Failed to open %s for reading (%s)\n", final_exec, strerror(errno));
+  } else if (fread(read_buf, 2, 1, exec_fp) == 1 && memcmp(read_buf, "#!", 2) == 0) {
     char script_path[PATH_MAX], *interpreter_opt;
 
     strncpy(script_path, final_exec, PATH_MAX);
@@ -299,7 +319,7 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
     // extract interpreter path and interpreter argument (if any)
     strncpy(final_exec, strtok(read_buf, " "), PATH_MAX);
 
-    if (interpreter_opt = strtok(NULL, "\0")) {
+    if ((interpreter_opt = strtok(NULL, "\0"))) {
       new_argv[0] = final_exec;
       new_argv[1] = interpreter_opt;
       new_argv[2] = script_path;
@@ -312,14 +332,14 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
 
     if (verbose) fprintf(stderr, "crew-preload: Will re-execute as: %s %s %s ...\n", new_argv[0], new_argv[1], new_argv[2]);
 
-    return exec_wrapper(final_exec, new_argv, envp, false, pid, file_actions, attrp);
+    return exec_wrapper(final_exec, new_argv, new_envp, false, pid, file_actions, attrp);
   }
 
   if (compile_hacks) {
     char mold_exec[PATH_MAX];
 
     // check if current executable is a linker
-    for (int i = 0; i < sizeof(linkers) / sizeof(char *); i++) {
+    for (int i = 0; i < (int) (sizeof(linkers) / sizeof(char *)); i++) {
       if (strcmp(filename, linkers[i]) == 0) {
         is_linker = true;
         break;
@@ -350,9 +370,9 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
   }
 
   if (pid == NULL) {
-    return orig_execve(final_exec, new_argv, envp);
+    return orig_execve(final_exec, new_argv, new_envp);
   } else {
     return orig_posix_spawn((pid_t *) pid, final_exec, (const posix_spawn_file_actions_t *) file_actions,
-                            (const posix_spawnattr_t *) attrp, new_argv, envp);
+                            (const posix_spawnattr_t *) attrp, new_argv, new_envp);
   }
 }
