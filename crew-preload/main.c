@@ -24,7 +24,6 @@
     - Calls to /bin/{bash,sh} will be redirected to ${CREW_PREFIX}/bin/{bash,sh} (unless CREW_PRELOAD_NO_CREW_SHELL=1)
 
   If CREW_PRELOAD_ENABLE_COMPILE_HACKS is set, this wrapper will also:
-    - Redirect glibc-specific file's open request to CREW_GLIBC_PREFIX
     - Append --dynamic-linker flag to linker commend
     - Replace linker command with mold (can be disabled with CREW_PRELOAD_NO_MOLD)
 
@@ -53,16 +52,13 @@
 #define SYSTEM_GLIBC_INTERPRETER "/lib64/ld-linux-x86-64.so.2"
 #endif
 
-bool initialized      = false,
-     compile_hacks    = false,
-     no_crew_shell    = false,
-     no_mold          = false,
-     verbose          = false;
-int  glibc_file_count = 0;
+bool initialized   = false,
+     compile_hacks = false,
+     no_crew_shell = false,
+     no_mold       = false,
+     verbose       = false;
 
-char glibc_files[128][PATH_MAX];
-
-const char *ld_executables[] = {
+const char *linkers[] = {
   "ld",
   "ld.bfd",
   "ld.gold",
@@ -78,19 +74,11 @@ const char *system_exe_path[] = {
   "/sbin/"
 };
 
-int   (*orig_access)(const char *pathname, int mode);
-int   (*orig_stat)(const char *restrict pathname, struct stat *restrict statbuf);
-int   (*orig_statx)(int dirfd, const char *restrict pathname, int flags, unsigned int mask, struct statx *restrict statxbuf);
-int   (*orig_lstat)(const char *restrict pathname, struct stat *restrict statbuf);
-int   (*orig_open)(const char *pathname, int flags, mode_t mode);
-int   (*orig_open64)(const char *pathname, int flags, mode_t mode);
-FILE* (*orig_fopen)(const char *filename, const char *mode);
-FILE* (*orig_fopen64)(const char *filename, const char *mode);
-int   (*orig_execve)(const char *pathname, char *const *argv, char *const *envp);
-int   (*orig_posix_spawn)(pid_t *pid, const char *pathname,
-                          const posix_spawn_file_actions_t *file_actions,
-                          const posix_spawnattr_t *attrp,
-                          char *const *argv, char *const *envp);
+static int (*orig_execve)(const char *pathname, char *const *argv, char *const *envp);
+static int (*orig_posix_spawn)(pid_t *pid, const char *pathname,
+                               const posix_spawn_file_actions_t *file_actions,
+                               const posix_spawnattr_t *attrp,
+                               char *const *argv, char *const *envp);
 
 void init(void) {
   DIR *dir;
@@ -103,49 +91,9 @@ void init(void) {
   if (strcmp(getenv("CREW_PRELOAD_NO_CREW_SHELL") ?: "0", "1") == 0)        no_crew_shell = true;
   if (strcmp(getenv("CREW_PRELOAD_NO_MOLD") ?: "0", "1") == 0)              no_mold       = true;
 
-  orig_access      = dlsym(RTLD_NEXT, "access");
-  orig_stat        = dlsym(RTLD_NEXT, "stat");
-  orig_statx       = dlsym(RTLD_NEXT, "statx");
-  orig_lstat       = dlsym(RTLD_NEXT, "lstat");
-  orig_open        = dlsym(RTLD_NEXT, "open");
-  orig_open64      = dlsym(RTLD_NEXT, "open64");
-  orig_fopen       = dlsym(RTLD_NEXT, "fopen");
-  orig_fopen64     = dlsym(RTLD_NEXT, "fopen64");
   orig_execve      = dlsym(RTLD_NEXT, "execve");
   orig_posix_spawn = dlsym(RTLD_NEXT, "posix_spawn");
-
-  if ((dir = opendir(CREW_GLIBC_PREFIX)) == NULL) return;
-
-  while ((entry = readdir(dir)) != NULL) {
-    filename = entry->d_name;
-
-    if (entry->d_type == DT_REG && (strstr(filename, ".o") || strstr(filename, ".a") || strstr(filename, ".so"))) {
-      // build a list consisting of all libraries/objects under CREW_GLIBC_PREFIX for later use
-      strncpy(glibc_files[glibc_file_count++], filename, PATH_MAX - 1);
-    }
-  }
-
-  closedir(dir);
-  initialized = true;
-}
-
-void replace_path_if_needed(const char *orig_path, char *final_path) {
-  // replace_path_if_needed(): redirect file path to CREW_GLIBC_PREFIX if necessary
-  char *filename = basename(orig_path);
-
-  // hijack file path if needed
-  if (strncmp(orig_path, "/usr/local/lib", 14) == 0 || strncmp(orig_path, "/usr/lib", 8) == 0) {
-    for (int i = 0; i < glibc_file_count; i++) {
-      if (strcmp(filename, glibc_files[i]) == 0) {
-        snprintf(final_path, PATH_MAX, "%s/%s", CREW_GLIBC_PREFIX, filename);
-        if (verbose) fprintf(stderr, "crew-preload: Replacing %s with %s\n", orig_path, final_path);
-        return;
-      }
-    }
-  }
-
-  // return the original path as-is if we are still here
-  strncpy(final_path, orig_path, PATH_MAX);
+  initialized      = true;
 }
 
 int count_args(va_list argp) {
@@ -171,7 +119,7 @@ int copy2array(char * const* src, char **dest, int offset) {
   // copy2array(): copy all elements from src[i] to dest[offset + i]
   int i;
 
-  for (i = 0; src[i] != NULL; i++) asprintf(&dest[offset + i], "%s", src[i]);
+  for (i = 0; src[i] != NULL; i++) dest[offset + i] = strdup(src[i]);
   dest[offset + i] = NULL;
 
   return i;
@@ -195,13 +143,13 @@ int search_in_path(const char *file, char *result) {
   do {
     snprintf(result, PATH_MAX, "%s/%s", search_path, file);
 
-    if (orig_access(result, X_OK) == 0) {
+    if (access(result, X_OK) == 0) {
       // file found in path and it is executable
       return_value = 0;
 
       if (verbose) fprintf(stderr, "crew-preload: %s => %s\n", file, result);
       break;
-    } else if (orig_access(result, F_OK) == 0) {
+    } else if (access(result, F_OK) == 0) {
       // file found in path but it is not executable
       return_value = EACCES;
     }
@@ -228,7 +176,8 @@ bool is_dynamic_executable(char *pathname) {
 
 int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
                  bool perform_path_search, void *pid, const void *file_actions, const void *attrp) {
-  bool    is_linker   = false,
+  bool    is_compiler = false,
+          is_linker   = false,
           is_system   = false,
           is_a_path   = false;
   char    **new_argv  = alloca(8192 * sizeof(char *)),
@@ -257,7 +206,7 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
   argc = copy2array(argv, new_argv, 0);
 
   // check if path_or_name is a relative or absolute path
-  if (!perform_path_search || orig_access(path_or_name, F_OK) == 0 ||
+  if (!perform_path_search || access(path_or_name, F_OK) == 0 ||
       path_or_name[0] == '/' || strncmp(path_or_name, "./", 2) == 0 ||
       strncmp(path_or_name, "../", 3) == 0) {
 
@@ -288,7 +237,7 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
       char new_path[PATH_MAX];
       snprintf(new_path, PATH_MAX, "%s%s", CREW_PREFIX, final_exec);
 
-      if (orig_access(new_path, X_OK) == 0) {
+      if (access(new_path, X_OK) == 0) {
         if (verbose) fprintf(stderr, "crew-preload: Shell detected (%s), will use Chromebrew version of %s instead\n", final_exec, filename);
 
         is_system = false;
@@ -298,10 +247,10 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
   }
 
   // try searching in CREW_PREFIX if the executable is prefixed with system path and cannot be found
-  if (is_system && orig_access(final_exec, F_OK) != 0) {
+  if (is_system && access(final_exec, F_OK) != 0) {
     asprintf(&final_exec, "%s/bin/%s", CREW_PREFIX, filename);
 
-    if (orig_access(final_exec, F_OK) == 0) {
+    if (access(final_exec, F_OK) == 0) {
       if (verbose) fprintf(stderr, "crew-preload: %s => %s\n", path_or_name, final_exec);
       is_system = false;
     } else {
@@ -331,13 +280,13 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
 
   // check for permission first, raise an error if the executable isn't executable
   // EACCES: Permission denied
-  if (orig_access(final_exec, X_OK) != 0) return EACCES;
+  if (access(final_exec, X_OK) != 0) return EACCES;
 
   // parse shebang and re-execute with specified interpreter if the executable is a script
   FILE *exec_fp = fopen(final_exec, "re");
 
   if (fread(read_buf, 2, 1, exec_fp) == 1 && memcmp(read_buf, "#!", 2) == 0) {
-    char script_path[PATH_MAX];
+    char script_path[PATH_MAX], *interpreter_opt;
 
     strncpy(script_path, final_exec, PATH_MAX);
 
@@ -350,30 +299,36 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
     // extract interpreter path and interpreter argument (if any)
     strncpy(final_exec, strtok(read_buf, " "), PATH_MAX);
 
-    new_argv[0] = final_exec;
-    new_argv[1] = strtok(NULL, "\0") ?: script_path;
-    new_argv[2] = script_path;
-    argc        = copy2array(&argv[1], new_argv, (new_argv[2] == NULL) ? 2 : 3); // copy all arguments except argv[0]
+    if (interpreter_opt = strtok(NULL, "\0")) {
+      new_argv[0] = final_exec;
+      new_argv[1] = interpreter_opt;
+      new_argv[2] = script_path;
+      argc        = copy2array(&argv[1], new_argv, 3); // copy all arguments except argv[0]
+    } else {
+      new_argv[0] = final_exec;
+      new_argv[1] = script_path;
+      argc        = copy2array(&argv[1], new_argv, 2); // copy all arguments except argv[0]
+    }
 
     if (verbose) fprintf(stderr, "crew-preload: Will re-execute as: %s %s %s ...\n", new_argv[0], new_argv[1], new_argv[2]);
 
     return exec_wrapper(final_exec, new_argv, envp, false, pid, file_actions, attrp);
   }
 
-  // check if current executable is a linker
-  for (int i = 0; i < sizeof(ld_executables) / sizeof(char *); i++) {
-    if (strcmp(filename, ld_executables[i]) == 0) {
-      is_linker = true;
-      break;
-    }
-  }
-
-  if (compile_hacks && is_linker) {
+  if (compile_hacks) {
     char mold_exec[PATH_MAX];
 
-    if (strcmp(filename, "mold") != 0 && strcmp(filename, "ld.mold") != 0) {
-      if (no_mold && verbose) {
-        fprintf(stderr, "crew-preload: CREW_PRELOAD_NO_MOLD is set, will NOT modify linker path\n");
+    // check if current executable is a linker
+    for (int i = 0; i < sizeof(linkers) / sizeof(char *); i++) {
+      if (strcmp(filename, linkers[i]) == 0) {
+        is_linker = true;
+        break;
+      }
+    }
+
+    if (is_linker) {
+      if (no_mold) {
+        if (verbose) fprintf(stderr, "crew-preload: CREW_PRELOAD_NO_MOLD is set, will NOT modify linker path\n");
       } else {
         if (verbose) fprintf(stderr, "crew-preload: Linker detected (%s), will use mold linker\n", filename);
 
@@ -385,21 +340,16 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
           fprintf(stderr, "crew-preload: Mold linker is not executable (%s), will NOT modify linker path\n", strerror(ret));
         };
       }
+
+      if (verbose) fprintf(stderr, "crew-preload: Appending --dynamic-linker flag to the linker...\n");
+
+      new_argv[argc++] = "--dynamic-linker";
+      new_argv[argc++] = CREW_GLIBC_INTERPRETER;
+      new_argv[argc]   = NULL;
     }
+  }
 
-    if (verbose) fprintf(stderr, "crew-preload: Appending --dynamic-linker flag to the linker...\n");
-
-    new_argv[argc++] = "--dynamic-linker";
-    new_argv[argc++] = CREW_GLIBC_INTERPRETER;
-    new_argv[argc]   = NULL;
-
-    if (pid == NULL) {
-      return orig_execve(final_exec, new_argv, envp);
-    } else {
-      return orig_posix_spawn((pid_t *) pid, final_exec, (const posix_spawn_file_actions_t *) file_actions,
-                              (const posix_spawnattr_t *) attrp, new_argv, envp);
-    }
-  } else if (pid == NULL) {
+  if (pid == NULL) {
     return orig_execve(final_exec, new_argv, envp);
   } else {
     return orig_posix_spawn((pid_t *) pid, final_exec, (const posix_spawn_file_actions_t *) file_actions,

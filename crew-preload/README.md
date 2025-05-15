@@ -18,7 +18,6 @@ This wrapper does the following things:
     ```
 
 If `CREW_PRELOAD_ENABLE_COMPILE_HACKS` is set, this wrapper will also:
-  - Redirect glibc-specific file's open request to `CREW_GLIBC_PREFIX`
   - Append `--dynamic-linker` flag to linker commend
   - Replace linker command with `mold` (can be disabled with `CREW_PRELOAD_NO_MOLD`)
 
