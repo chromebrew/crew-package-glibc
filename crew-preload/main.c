@@ -21,7 +21,7 @@
   This wrapper does the following things:
     - Fix hardcoded shebang/command path (e.g `#!/usr/bin/perl` will be converted to `#!${CREW_PREFIX}/bin/perl`)
     - Unset LD_LIBRARY_PATH before running any system commands (executables located under /{bin,sbin} or /usr/{bin,sbin})
-    - Calls to /bin/{bash,sh} will be redirected to ${CREW_PREFIX}/bin/{bash,sh} (unless CREW_PRELOAD_NO_CREW_SHELL=1)
+    - Shell script with shebang set as /bin/{bash,sh} will be interpreted by ${CREW_PREFIX}/bin/{bash,sh} instead (unless CREW_PRELOAD_NO_CREW_SHELL=1)
 
   If CREW_PRELOAD_ENABLE_COMPILE_HACKS is set, this wrapper will also:
     - Append --dynamic-linker flag to linker commend
@@ -242,23 +242,6 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
     }
   }
 
-  // always use Chromebrew version of shell (at ${CREW_PREFIX}/bin/{bash,sh}) when /bin/sh or /bin/bash is called
-  if (strcmp(final_exec, "/bin/sh") == 0 || strcmp(final_exec, "/bin/bash") == 0) {
-    if (no_crew_shell) {
-      if (verbose) fprintf(stderr, "crew-preload: CREW_PRELOAD_NO_CREW_SHELL set, will NOT modify shell path\n");
-    } else {
-      char new_path[PATH_MAX];
-      snprintf(new_path, PATH_MAX, "%s%s", CREW_PREFIX, final_exec);
-
-      if (access(new_path, X_OK) == 0) {
-        if (verbose) fprintf(stderr, "crew-preload: Shell detected (%s), will use Chromebrew version of %s instead\n", final_exec, filename);
-
-        is_system = false;
-        strncpy(final_exec, new_path, PATH_MAX);
-      }
-    }
-  }
-
   // try searching in CREW_PREFIX if the executable is prefixed with system path and cannot be found
   if (is_system && access(final_exec, F_OK) != 0) {
     asprintf(&final_exec, "%s/bin/%s", CREW_PREFIX, filename);
@@ -318,6 +301,21 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
 
     // extract interpreter path and interpreter argument (if any)
     strncpy(final_exec, strtok(read_buf, " "), PATH_MAX);
+
+    // always use Chromebrew version of shell (at ${CREW_PREFIX}/bin/{bash,sh}) when the interpreter path is /bin/sh or /bin/bash
+    if (strcmp(final_exec, "/bin/sh") == 0 || strcmp(final_exec, "/bin/bash") == 0) {
+      if (no_crew_shell) {
+        if (verbose) fprintf(stderr, "crew-preload: CREW_PRELOAD_NO_CREW_SHELL set, will NOT modify shell path\n");
+      } else {
+        char *new_path;
+        asprintf(&new_path, "%s%s", CREW_PREFIX, final_exec);
+
+        if (access(new_path, X_OK) == 0) {
+          if (verbose) fprintf(stderr, "crew-preload: Shell detected (%s), will use Chromebrew version of %s instead\n", final_exec, basename(final_exec));
+          strncpy(final_exec, new_path, PATH_MAX);
+        }
+      }
+    }
 
     if ((interpreter_opt = strtok(NULL, "\0"))) {
       new_argv[0] = final_exec;

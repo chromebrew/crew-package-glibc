@@ -10,11 +10,15 @@ This wrapper does the following things:
     magic file from /usr/local/share/misc/magic
     ```
   - Unset `LD_LIBRARY_PATH` before running any system commands (executables located under `/{bin,sbin}` or `/usr/{bin,sbin}`):
-  - Calls to `/bin/{bash,sh}` will be redirected to `${CREW_PREFIX}/bin/{bash,sh}` (unless `CREW_PRELOAD_NO_CREW_SHELL=1`):
+  - Shell script with shebang set as `/bin/{bash,sh}` will be interpreted by `${CREW_PREFIX}/bin/{bash,sh}` instead (unless CREW_PRELOAD_NO_CREW_SHELL=1):
     ```
-    $ LD_PRELOAD=crew-preload.so CREW_PRELOAD_VERBOSE=1 bash -c '/bin/sh -c ""'
-    crew-preload: exec*() called: /bin/sh
-    crew-preload: Shell detected (/bin/sh), will use Chromebrew version of sh instead
+    $ echo '#!/bin/bash' > test; chmod +x test
+    $ LD_PRELOAD=crew-preload.so bash -c 'CREW_PRELOAD_VERBOSE=1 ./test'
+    crew-preload: exec*() called: ./test
+    crew-preload: ./test is a script with shebang: '#!/bin/bash'
+    crew-preload: Shell detected (/bin/bash), will use Chromebrew version of bash instead
+    crew-preload: Will re-execute as: /usr/local/bin/bash ./test (null) ...
+    crew-preload: exec*() called: /usr/local/bin/bash
     ```
 
 If `CREW_PRELOAD_ENABLE_COMPILE_HACKS` is set, this wrapper will also:
