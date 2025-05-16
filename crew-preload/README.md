@@ -35,7 +35,7 @@ If `CREW_PRELOAD_ENABLE_COMPILE_HACKS` is set, this wrapper will also:
 
 ### Usage
 ```shell
-cc -O3 -fPIC -shared -fvisibility=hidden \
+cc -O3 -fPIC -shared -fvisibility=hidden -Wl,-soname,crew-preload.so \
   -DCREW_PREFIX=\"...\" -DCREW_GLIBC_PREFIX=\"...\" \
   -DCREW_GLIBC_INTERPRETER=\"...\" -DSYSTEM_GLIBC_INTERPRETER=\"...\" \
   crew-preload.c -o crew-preload.so

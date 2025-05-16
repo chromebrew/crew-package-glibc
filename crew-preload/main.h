@@ -30,7 +30,7 @@ extern char **environ;
 
 extern bool initialized;
 
-void init(void);
+void init(void) __attribute__((constructor));
 int  count_args(va_list argp);
 void va2array(va_list argp, int argc, char **argv);
 int  copy2array(char * const* src, char **dest, int offset);

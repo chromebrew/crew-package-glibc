@@ -29,7 +29,8 @@
 
   Usage: LD_PRELOAD=crew-preload.so <command>
 
-  cc -O3 -fPIC -shared -fvisibility=hidden -DCREW_PREFIX=\"...\" -DCREW_GLIBC_PREFIX=\"...\" \
+  cc -O3 -fPIC -shared -fvisibility=hidden -Wl,-soname,crew-preload.so \
+    -DCREW_PREFIX=\"...\" -DCREW_GLIBC_PREFIX=\"...\" \
     -DCREW_GLIBC_INTERPRETER=\"...\" -DSYSTEM_GLIBC_INTERPRETER=\"...\" \
     crew-preload.c -o crew-preload.so
 */
@@ -52,12 +53,12 @@
 #define SYSTEM_GLIBC_INTERPRETER "/lib64/ld-linux-x86-64.so.2"
 #endif
 
-bool compile_hacks           = false,
-     initialized             = false,
-     lib_path_restore_needed = false,
-     no_crew_shell           = false,
-     no_mold                 = false,
-     verbose                 = false;
+bool  compile_hacks = false,
+      initialized   = false,
+      no_crew_shell = false,
+      no_mold       = false,
+      verbose       = false;
+pid_t pid           = 0;
 
 const char *linkers[] = {
   "ld",
@@ -82,15 +83,25 @@ static int (*orig_posix_spawn)(pid_t *pid, const char *pathname,
                                char *const *argv, char *const *envp);
 
 void init(void) {
+  char *old_library_path = getenv("CREW_PRELOAD_LIBRARY_PATH");
+
   if (strcmp(getenv("CREW_PRELOAD_ENABLE_COMPILE_HACKS") ?: "0", "1") == 0) compile_hacks           = true;
-  if (strcmp(getenv("CREW_PRELOAD_LIB_PATH_MODIFIED") ?: "0", "1") == 0)    lib_path_restore_needed = true;
   if (strcmp(getenv("CREW_PRELOAD_NO_CREW_SHELL") ?: "0", "1") == 0)        no_crew_shell           = true;
   if (strcmp(getenv("CREW_PRELOAD_NO_MOLD") ?: "0", "1") == 0)              no_mold                 = true;
   if (strcmp(getenv("CREW_PRELOAD_VERBOSE") ?: "0", "1") == 0)              verbose                 = true;
 
+  pid              = getpid();
   orig_execve      = dlsym(RTLD_NEXT, "execve");
   orig_posix_spawn = dlsym(RTLD_NEXT, "posix_spawn");
   initialized      = true;
+
+  // restore LD_LIBRARY_PATH from CREW_PRELOAD_LIBRARY_PATH if it was unset previously by LD_PRELOAD in the parent process
+  if (old_library_path) {
+    if (verbose) fprintf(stderr, "[PID %i] crew-preload: LD_LIBRARY_PATH restored (%s)\n", pid, old_library_path);
+
+    setenv("LD_LIBRARY_PATH", old_library_path, true);
+    unsetenv("CREW_PRELOAD_LIBRARY_PATH");
+  }
 }
 
 int count_args(va_list argp) {
@@ -144,7 +155,7 @@ int search_in_path(const char *file, char *result) {
       // file found in path and it is executable
       return_value = 0;
 
-      if (verbose) fprintf(stderr, "crew-preload: %s => %s\n", file, result);
+      if (verbose) fprintf(stderr, "[PID %i] crew-preload: %s => %s\n", pid, file, result);
       break;
     } else if (access(result, F_OK) == 0) {
       // file found in path but it is not executable
@@ -157,39 +168,33 @@ int search_in_path(const char *file, char *result) {
 
 bool is_dynamic_executable(char *pathname) {
   // is_dymanic_executable(): Check whether the given file is a dynamically linked ELF executable
-  char *argv[] = { "ld.so", "--verify", pathname, NULL };
+  char *argv[] = { SYSTEM_GLIBC_INTERPRETER, "--verify", pathname, NULL };
   int pid, status;
 
-  status = orig_posix_spawn(&pid, SYSTEM_GLIBC_INTERPRETER, NULL, NULL, argv, environ);
+  if ((pid = fork()) == 0) {
+    // slience output
+    dup2(open("/dev/null", O_RDWR | O_CLOEXEC), STDOUT_FILENO);
+
+    if (orig_execve(SYSTEM_GLIBC_INTERPRETER, argv, environ) == -1) {
+      fprintf(stderr, "[PID %i] crew-preload: execve() failed for %s (%s)", pid, SYSTEM_GLIBC_INTERPRETER, strerror(errno));
+      exit(10);
+    }
+  } else if (pid == -1) {
+    fprintf(stderr, "[PID %i] crew-preload: fork() failed (%s)", pid, strerror(errno));
+    return false;
+  }
 
   if (status == 0) {
     waitpid(pid, &status, 0);
     return (WEXITSTATUS(status) == 0) ? true : false;
   } else {
-    fprintf(stderr, "crew-preload: posix_spawn(\"ld.so --verify\") failed: %s\n", strerror(status));
+    fprintf(stderr, "[PID %i] crew-preload: posix_spawn(\"ld.so --verify\") failed: %s\n", pid, strerror(status));
     return false;
   }
 }
 
-void unsetenvfp(char **envp, char *name) {
-  // unsetenvfp(): delete a specific environment variable from given envp
-  int name_len = strlen(name);
-
-  for (int i = 0; envp[i]; i++) {
-    if (strncmp(envp[i], name, name_len) == 0) {
-      // delete corresponding index from envp if found
-      int j;
-
-      for (j = i; envp[j + 1]; j++) envp[j] = envp[j + 1];
-      envp[j - 1] = NULL;
-
-      return;
-    }
-  }
-};
-
 int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
-                 bool perform_path_search, void *pid, const void *file_actions, const void *attrp) {
+                 bool perform_path_search, void *pid_p, const void *file_actions, const void *attrp) {
   bool    is_linker   = false,
           is_system   = false,
           is_a_path   = false;
@@ -203,17 +208,17 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
   FILE    *exec_fp;
 
   if (verbose) {
-    if (pid == NULL) {
+    if (pid_p == NULL) {
       if (perform_path_search) {
-        fprintf(stderr, "crew-preload: exec*p() called: %s\n", path_or_name);
+        fprintf(stderr, "[PID %i] crew-preload: exec*p() called: %s\n", pid, path_or_name);
       } else {
-        fprintf(stderr, "crew-preload: exec*() called: %s\n", path_or_name);
+        fprintf(stderr, "[PID %i] crew-preload: exec*() called: %s\n", pid, path_or_name);
       }
     } else {
       if (perform_path_search) {
-        fprintf(stderr, "crew-preload: posix_spawn() called: %s\n", path_or_name);
+        fprintf(stderr, "[PID %i] crew-preload: posix_spawn() called: %s\n", pid, path_or_name);
       } else {
-        fprintf(stderr, "crew-preload: posix_spawnp() called: %s\n", path_or_name);
+        fprintf(stderr, "[PID %i] crew-preload: posix_spawnp() called: %s\n", pid, path_or_name);
       }
     }
   }
@@ -247,7 +252,7 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
     asprintf(&final_exec, "%s/bin/%s", CREW_PREFIX, filename);
 
     if (access(final_exec, F_OK) == 0) {
-      if (verbose) fprintf(stderr, "crew-preload: %s => %s\n", path_or_name, final_exec);
+      if (verbose) fprintf(stderr, "[PID %i] crew-preload: %s => %s\n", pid, path_or_name, final_exec);
       is_system = false;
     } else {
       // return an error if we cannot find any matching executables
@@ -257,26 +262,10 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
   } else if (is_system && is_dynamic_executable(final_exec)) {
     // unset LD_LIBRARY_PATH for system commands, original value will be copied into CREW_PRELOAD_LIBRARY_PATH environment variable
     // (see https://github.com/chromebrew/chromebrew/issues/5777 for more information)
-    if (verbose) fprintf(stderr, "crew-preload: System command detected, will execute with LD_LIBRARY_PATH unset...\n");
+    if (verbose) fprintf(stderr, "[PID %i] crew-preload: System command detected, will execute with LD_LIBRARY_PATH unset...\n", pid);
 
-    if (!lib_path_restore_needed) {
-      asprintf(&new_envp[envc++], "CREW_PRELOAD_LIBRARY_PATH=%s", getenv("LD_LIBRARY_PATH"));
-
-      new_envp[envc++] = "CREW_PRELOAD_LIB_PATH_MODIFIED=1";
-      new_envp[envc]   = NULL;
-    }
-  } else if (!is_system && lib_path_restore_needed) {
-    // restore LD_LIBRARY_PATH from CREW_PRELOAD_LIBRARY_PATH if it was unset previously by LD_PRELOAD in the parent process
-    char *library_path = getenv("CREW_PRELOAD_LIBRARY_PATH");
-
-    if (library_path) {
-      if (verbose) fprintf(stderr, "crew-preload: LD_LIBRARY_PATH restored (%s)\n", library_path);
-
-      asprintf(&new_envp[argc++], "LD_LIBRARY_PATH=%s", library_path);
-
-      unsetenvfp(new_envp, "CREW_PRELOAD_LIBRARY_PATH");
-      unsetenvfp(new_envp, "CREW_PRELOAD_LIB_PATH_MODIFIED");
-    }
+    asprintf(&new_envp[envc++], "CREW_PRELOAD_LIBRARY_PATH=%s", getenv("LD_LIBRARY_PATH"));
+    new_envp[envc] = NULL;
   }
 
   // check for permission first, raise an error if the executable isn't executable
@@ -287,7 +276,7 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
   exec_fp = fopen(final_exec, "re");
 
   if (!exec_fp) {
-    if (verbose) fprintf(stderr, "crew-preload: Failed to open %s for reading (%s)\n", final_exec, strerror(errno));
+    if (verbose) fprintf(stderr, "[PID %i] crew-preload: Failed to open %s for reading (%s)\n", pid, final_exec, strerror(errno));
   } else if (fread(read_buf, 2, 1, exec_fp) == 1 && memcmp(read_buf, "#!", 2) == 0) {
     char script_path[PATH_MAX], *interpreter_opt;
 
@@ -297,7 +286,7 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
     fgets(read_buf, PATH_MAX, exec_fp);
     read_buf[strchr(read_buf, '\n') - read_buf] = '\0'; // remove newline
 
-    if (verbose) fprintf(stderr, "crew-preload: %s is a script with shebang: '#!%s'\n", final_exec, read_buf);
+    if (verbose) fprintf(stderr, "[PID %i] crew-preload: %s is a script with shebang: '#!%s'\n", pid, final_exec, read_buf);
 
     // extract interpreter path and interpreter argument (if any)
     strncpy(final_exec, strtok(read_buf, " "), PATH_MAX);
@@ -305,13 +294,13 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
     // always use Chromebrew version of shell (at ${CREW_PREFIX}/bin/{bash,sh}) when the interpreter path is /bin/sh or /bin/bash
     if (strcmp(final_exec, "/bin/sh") == 0 || strcmp(final_exec, "/bin/bash") == 0) {
       if (no_crew_shell) {
-        if (verbose) fprintf(stderr, "crew-preload: CREW_PRELOAD_NO_CREW_SHELL set, will NOT modify shell path\n");
+        if (verbose) fprintf(stderr, "[PID %i] crew-preload: CREW_PRELOAD_NO_CREW_SHELL set, will NOT modify shell path\n", pid);
       } else {
         char *new_path;
         asprintf(&new_path, "%s%s", CREW_PREFIX, final_exec);
 
         if (access(new_path, X_OK) == 0) {
-          if (verbose) fprintf(stderr, "crew-preload: Shell detected (%s), will use Chromebrew version of %s instead\n", final_exec, basename(final_exec));
+          if (verbose) fprintf(stderr, "[PID %i] crew-preload: Shell detected (%s), will use Chromebrew version of %s instead\n", pid, final_exec, basename(final_exec));
           strncpy(final_exec, new_path, PATH_MAX);
         }
       }
@@ -328,9 +317,9 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
       argc        = copy2array(&argv[1], new_argv, 2); // copy all arguments except argv[0]
     }
 
-    if (verbose) fprintf(stderr, "crew-preload: Will re-execute as: %s %s %s ...\n", new_argv[0], new_argv[1], new_argv[2]);
+    if (verbose) fprintf(stderr, "[PID %i] crew-preload: Will re-execute as: %s %s %s ...\n", pid, new_argv[0], new_argv[1], new_argv[2]);
 
-    return exec_wrapper(final_exec, new_argv, new_envp, false, pid, file_actions, attrp);
+    return exec_wrapper(final_exec, new_argv, new_envp, false, pid_p, file_actions, attrp);
   }
 
   if (compile_hacks) {
@@ -346,20 +335,20 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
 
     if (is_linker) {
       if (no_mold) {
-        if (verbose) fprintf(stderr, "crew-preload: CREW_PRELOAD_NO_MOLD is set, will NOT modify linker path\n");
+        if (verbose) fprintf(stderr, "[PID %i] crew-preload: CREW_PRELOAD_NO_MOLD is set, will NOT modify linker path\n", pid);
       } else {
-        if (verbose) fprintf(stderr, "crew-preload: Linker detected (%s), will use mold linker\n", filename);
+        if (verbose) fprintf(stderr, "[PID %i] crew-preload: Linker detected (%s), will use mold linker\n", pid, filename);
 
         int ret = search_in_path("mold", mold_exec);
 
         if (ret == 0) {
           strncpy(final_exec, mold_exec, PATH_MAX);
         } else {
-          fprintf(stderr, "crew-preload: Mold linker is not executable (%s), will NOT modify linker path\n", strerror(ret));
+          fprintf(stderr, "[PID %i] crew-preload: Mold linker is not executable (%s), will NOT modify linker path\n", pid, strerror(ret));
         };
       }
 
-      if (verbose) fprintf(stderr, "crew-preload: Appending --dynamic-linker flag to the linker...\n");
+      if (verbose) fprintf(stderr, "[PID %i] crew-preload: Appending --dynamic-linker flag to the linker...\n", pid);
 
       new_argv[argc++] = "--dynamic-linker";
       new_argv[argc++] = CREW_GLIBC_INTERPRETER;
@@ -367,10 +356,10 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
     }
   }
 
-  if (pid == NULL) {
+  if (pid_p == NULL) {
     return orig_execve(final_exec, new_argv, new_envp);
   } else {
-    return orig_posix_spawn((pid_t *) pid, final_exec, (const posix_spawn_file_actions_t *) file_actions,
+    return orig_posix_spawn((pid_t *) pid_p, final_exec, (const posix_spawn_file_actions_t *) file_actions,
                             (const posix_spawnattr_t *) attrp, new_argv, new_envp);
   }
 }
