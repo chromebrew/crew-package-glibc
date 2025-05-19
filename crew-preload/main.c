@@ -193,6 +193,19 @@ bool is_dynamic_executable(char *pathname) {
   }
 }
 
+void unsetenvfp(char **envp, char *name) {
+  // unsetenvfp: Remove specific environment variable from given environ pointer
+  int name_len = strlen(name);
+
+  for (int i = 0; envp[i]; i++) {
+    if (strncmp(envp[i], name, name_len) == 0) {
+      int j;
+      for (j = i + 1; envp[j]; j++) envp[j - 1] = envp[j];
+      envp[j] = NULL;
+    }
+  }
+}
+
 int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
                  bool perform_path_search, void *pid_p, const void *file_actions, const void *attrp) {
   bool    is_linker   = false,
@@ -239,6 +252,15 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
     if (ret != 0) return ret;
   }
 
+  // unset LD_PRELOAD/LD_LIBRARY_PATH when executable is libc.so.6, as it will cause segfaults
+  if (strcmp(filename, "libc.so.6") == 0) {
+    if (verbose) fprintf(stderr, "[PID %i] crew-preload: libc.so.6 detected, will execute with LD_* unset...\n", pid);
+
+    unsetenvfp(new_envp, "LD_LIBRARY_PATH");
+    unsetenvfp(new_envp, "LD_PRELOAD");
+    envc--;
+  }
+
   // check if executable is a system command or not
   for (int i = 0; i < (int) (sizeof(system_exe_path) / sizeof(char *)); i++) {
     if (strncmp(final_exec, system_exe_path[i], strlen(system_exe_path[i])) == 0) {
@@ -264,6 +286,7 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
     // (see https://github.com/chromebrew/chromebrew/issues/5777 for more information)
     if (verbose) fprintf(stderr, "[PID %i] crew-preload: System command detected, will execute with LD_LIBRARY_PATH unset...\n", pid);
 
+    unsetenvfp(new_envp, "LD_LIBRARY_PATH");
     asprintf(&new_envp[envc++], "CREW_PRELOAD_LIBRARY_PATH=%s", getenv("LD_LIBRARY_PATH"));
     new_envp[envc] = NULL;
   }
