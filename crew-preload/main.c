@@ -82,7 +82,7 @@ static int (*orig_posix_spawn)(pid_t *pid, const char *pathname,
                                const posix_spawnattr_t *attrp,
                                char *const *argv, char *const *envp);
 
-void init(void) {
+void preload_init(void) {
   char *old_library_path = getenv("CREW_PRELOAD_LIBRARY_PATH");
 
   if (strcmp(getenv("CREW_PRELOAD_ENABLE_COMPILE_HACKS") ?: "0", "1") == 0) compile_hacks           = true;
@@ -94,6 +94,8 @@ void init(void) {
   orig_execve      = dlsym(RTLD_NEXT, "execve");
   orig_posix_spawn = dlsym(RTLD_NEXT, "posix_spawn");
   initialized      = true;
+
+  if (verbose) fprintf(stderr, "[PID %i] crew-preload: Running on glibc version %s\n", pid, gnu_get_libc_version());
 
   // restore LD_LIBRARY_PATH from CREW_PRELOAD_LIBRARY_PATH if it was unset previously by LD_PRELOAD in the parent process
   if (old_library_path) {
@@ -176,21 +178,16 @@ bool is_dynamic_executable(char *pathname) {
     dup2(open("/dev/null", O_RDWR | O_CLOEXEC), STDOUT_FILENO);
 
     if (orig_execve(SYSTEM_GLIBC_INTERPRETER, argv, environ) == -1) {
-      fprintf(stderr, "[PID %i] crew-preload: execve() failed for %s (%s)", pid, SYSTEM_GLIBC_INTERPRETER, strerror(errno));
-      exit(10);
+      fprintf(stderr, "[PID %i] crew-preload: execve(\"ld.so --verify\") failed (%s)", pid, strerror(errno));
+      exit(errno);
     }
   } else if (pid == -1) {
     fprintf(stderr, "[PID %i] crew-preload: fork() failed (%s)", pid, strerror(errno));
     return false;
   }
 
-  if (status == 0) {
-    waitpid(pid, &status, 0);
-    return (WEXITSTATUS(status) == 0) ? true : false;
-  } else {
-    fprintf(stderr, "[PID %i] crew-preload: posix_spawn(\"ld.so --verify\") failed: %s\n", pid, strerror(status));
-    return false;
-  }
+  waitpid(pid, &status, 0);
+  return (WEXITSTATUS(status) == 0) ? true : false;
 }
 
 void unsetenvfp(char **envp, char *name) {

@@ -30,7 +30,7 @@ int execl(const char *path, const char *arg, ...) {
   int     argc;
   va_list argp;
 
-  if (!initialized) init();
+  if (!initialized) preload_init();
 
   va_start(argp, arg);
   argc    = count_args(argp);
@@ -48,7 +48,7 @@ int execle(const char *path, const char *arg, ...) {
   int     argc;
   va_list argp;
 
-  if (!initialized) init();
+  if (!initialized) preload_init();
 
   va_start(argp, arg);
   argc    = count_args(argp);
@@ -67,7 +67,7 @@ int execlp(const char *path, const char *arg, ...) {
   int     argc;
   va_list argp;
 
-  if (!initialized) init();
+  if (!initialized) preload_init();
 
   va_start(argp, arg);
   argc    = count_args(argp);
@@ -81,22 +81,22 @@ int execlp(const char *path, const char *arg, ...) {
 }
 
 int execv(const char *path, char *const *argv) {
-  if (!initialized) init();
+  if (!initialized) preload_init();
   return exec_wrapper(path, argv, environ, false, NULL, NULL, NULL);
 }
 
 int execve(const char *path, char *const *argv, char *const *envp) {
-  if (!initialized) init();
+  if (!initialized) preload_init();
   return exec_wrapper(path, argv, envp, false, NULL, NULL, NULL);
 }
 
 int execvp(const char *file, char *const *argv) {
-  if (!initialized) init();
+  if (!initialized) preload_init();
   return exec_wrapper(file, argv, environ, true, NULL, NULL, NULL);
 }
 
 int execvpe(const char *file, char *const *argv, char *const *envp) {
-  if (!initialized) init();
+  if (!initialized) preload_init();
   return exec_wrapper(file, argv, envp, true, NULL, NULL, NULL);
 }
 
@@ -104,7 +104,7 @@ int posix_spawn(pid_t *pid, const char *path,
                 const posix_spawn_file_actions_t *file_actions,
                 const posix_spawnattr_t *attrp,
                 char *const *argv, char *const *envp) {
-  if (!initialized) init();
+  if (!initialized) preload_init();
   return exec_wrapper(path, argv, envp, false, pid, file_actions, attrp);
 }
 
@@ -112,6 +112,6 @@ int posix_spawnp(pid_t *pid, const char *file,
                  const posix_spawn_file_actions_t *file_actions,
                  const posix_spawnattr_t *attrp,
                  char *const *argv, char *const *envp) {
-  if (!initialized) init();
+  if (!initialized) preload_init();
   return exec_wrapper(file, argv, envp, true, pid, file_actions, attrp);
 }
