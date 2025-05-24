@@ -29,6 +29,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/utsname.h>
 
 #ifndef SYS_memfd_create
 #if defined(__arm__)

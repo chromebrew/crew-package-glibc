@@ -46,6 +46,8 @@ bool  compile_hacks = false,
       verbose       = false;
 pid_t pid           = 0;
 
+struct utsname kernel_info;
+
 const char *cmd_override_list[] = {
   "/bin/bash",
   "/bin/sh",
@@ -77,6 +79,8 @@ static int (*orig_posix_spawn)(pid_t *pid, const char *pathname,
 void preload_init(void) {
   char *old_library_path = getenv("CREW_PRELOAD_LIBRARY_PATH");
 
+  if (uname(&kernel_info) == -1) fprintf(stderr, "[PID %-7i] %s: uname() failed (%s)\n", pid, PROMPT_NAME, strerror(errno));
+
   if (strcmp(getenv("CREW_PRELOAD_ENABLE_COMPILE_HACKS") ?: "0", "1") == 0) compile_hacks = true;
   if (strcmp(getenv("CREW_PRELOAD_NO_CREW_CMD") ?: "0", "1") == 0)          no_crew_cmd   = true;
   if (strcmp(getenv("CREW_PRELOAD_NO_CREW_GLIBC") ?: "0", "1") == 0)        no_crew_glibc = true;
@@ -88,7 +92,7 @@ void preload_init(void) {
   orig_posix_spawn = dlsym(RTLD_NEXT, "posix_spawn");
   initialized      = true;
 
-  if (verbose) fprintf(stderr, "[PID %-7i] %s: Running on glibc version %s\n", pid, PROMPT_NAME, gnu_get_libc_version());
+  if (verbose) fprintf(stderr, "[PID %-7i] %s: Running on %s kernel, glibc version %s\n", pid, PROMPT_NAME, kernel_info.machine, gnu_get_libc_version());
 
   // restore LD_LIBRARY_PATH from CREW_PRELOAD_LIBRARY_PATH if it was unset previously by LD_PRELOAD in the parent process
   if (old_library_path) {
@@ -333,6 +337,12 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
       unsetenvfp(new_envp, "LD_PRELOAD");
 
       if (elf_info.is_64bit) {
+        if (strcmp(kernel_info.machine, "aarch64") != 0 && strcmp(kernel_info.machine, "x86_64") != 0) {
+          // return ENOEXEC if the system doesn't support 64-bit executables
+          // ENOEXEC: Exec format error
+          return ENOEXEC;
+        }
+
         // execute 64-bit binaries with 64-bit version of crew-preload.so
         asprintf(&new_envp[envc - 1], "LD_PRELOAD=%s/lib64/crew-preload.so", CREW_PREFIX);
       } else {
