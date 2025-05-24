@@ -1,4 +1,4 @@
-From 585bbba361c27755a3db2cac7cc2def2268aa396 Mon Sep 17 00:00:00 2001
+From b892495a1b1c3c49b5021e6703982a4db341c991 Mon Sep 17 00:00:00 2001
 From: Adrian Ratiu <adrian.ratiu@collabora.com>
 Date: Tue, 27 Jun 2023 15:11:47 +0300
 Subject: [PATCH 2/3] Revert "Add GLIBC_ABI_DT_RELR for DT_RELR support"

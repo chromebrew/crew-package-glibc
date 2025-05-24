@@ -11,10 +11,11 @@
 #define MAIN_H_INCLUDED
 
 #define _GNU_SOURCE
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdbool.h>
 #include <stdarg.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdint.h>
+#include <stdlib.h>
 #include <dirent.h>
 #include <dlfcn.h>
 #include <errno.h>
@@ -24,8 +25,61 @@
 #include <unistd.h>
 #include <gnu/libc-version.h>
 #include <linux/limits.h>
+#include <sys/auxv.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
-#include <sys/wait.h>
+#include <sys/syscall.h>
+
+#ifndef SYS_memfd_create
+#if defined(__arm__)
+#define SYS_memfd_create 385
+#elif defined(__i686__)
+#define SYS_memfd_create 356
+#elif defined(__aarch64__)
+#define SYS_memfd_create 279
+#elif defined(__x86_64__)
+#define SYS_memfd_create 319
+#endif
+#endif
+
+#ifndef CREW_PREFIX
+#define CREW_PREFIX "/usr/local"
+#endif
+
+#ifndef CREW_GLIBC_INTERPRETER
+#if defined(__arm__)
+#define CREW_GLIBC_INTERPRETER "/usr/local/opt/glibc-libs/ld-linux-armhf.so.3"
+#elif defined(__aarch64__)
+#define CREW_GLIBC_INTERPRETER "/usr/local/opt/glibc-libs/ld-linux-aarch64.so.1"
+#elif defined(__i686__)
+#define CREW_GLIBC_INTERPRETER "/usr/local/opt/glibc-libs/ld-linux.so.2"
+#elif defined(__x86_64__)
+#define CREW_GLIBC_INTERPRETER "/usr/local/opt/glibc-libs/ld-linux-x86-64.so.2"
+#endif
+#endif
+
+#ifndef CREW_GLIBC_IS_64BIT
+#if defined(__x86_64__)
+#define CREW_GLIBC_IS_64BIT true
+#else
+#define CREW_GLIBC_IS_64BIT false
+#endif
+#endif
+
+#ifndef PROMPT_NAME
+#if defined(__aarch64__) || defined(__x86_64__)
+#define PROMPT_NAME "crew-preload (64-bit)"
+#else
+#define PROMPT_NAME "crew-preload"
+#endif
+#endif
+
+struct ElfInfo {
+  bool is_64bit;
+  bool is_dyn_exec;
+  char *interpreter;
+  void *pt_interp_section;
+};
 
 extern char **environ;
 

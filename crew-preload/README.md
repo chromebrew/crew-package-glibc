@@ -10,34 +10,36 @@ This wrapper does the following things:
     magic file from /usr/local/share/misc/magic
     ```
   - Unset `LD_LIBRARY_PATH` before running any system commands (executables located under `/{bin,sbin}` or `/usr/{bin,sbin}`):
-  - Shell script with shebang set as `/bin/{bash,sh}` will be interpreted by `${CREW_PREFIX}/bin/{bash,sh}` instead (unless CREW_PRELOAD_NO_CREW_SHELL=1):
+  - Redirect `/bin/{bash,sh,coreutils}` to `${CREW_PREFIX}/bin/{bash,sh,coreutils}` instead (unless `CREW_PRELOAD_NO_CREW_CMD=1`):
     ```
     $ echo '#!/bin/bash' > test; chmod +x test
     $ LD_PRELOAD=crew-preload.so bash -c 'CREW_PRELOAD_VERBOSE=1 ./test'
-    crew-preload: exec*() called: ./test
-    crew-preload: ./test is a script with shebang: '#!/bin/bash'
-    crew-preload: Shell detected (/bin/bash), will use Chromebrew version of bash instead
-    crew-preload: Will re-execute as: /usr/local/bin/bash ./test (null) ...
-    crew-preload: exec*() called: /usr/local/bin/bash
+    [PID 20327] crew-preload: exec*() called: ./test
+    [PID 20327] crew-preload: ./test is a script with shebang: '#!/bin/bash'
+    [PID 20327] crew-preload: Will re-execute as: /bin/bash ./test (null) ...
+    [PID 20327] crew-preload: exec*() called: /bin/bash
+    [PID 20327] crew-preload: Will use Chromebrew version of bash instead...
     ```
+  - Run all dynamically linked executables with Chromebrew's glibc/dynamic linker (unless `CREW_PRELOAD_NO_CREW_GLIBC=1`)
 
 If `CREW_PRELOAD_ENABLE_COMPILE_HACKS` is set, this wrapper will also:
   - Append `--dynamic-linker` flag to linker commend
   - Replace linker command with `mold` (can be disabled with `CREW_PRELOAD_NO_MOLD`)
 
 ### Available environment variables
-|Name                               |Description                                   |
-|:----------------------------------|:---------------------------------------------|
-|`CREW_PRELOAD_VERBOSE`             |Enable verbose logging                        |
-|`CREW_PRELOAD_ENABLE_COMPILE_HACKS`|Enable hacks that help compile (see above)    |
-|`CREW_PRELOAD_NO_CREW_SHELL`       |Do not rewrite shell path to Chromebrew's one |
-|`CREW_PRELOAD_NO_MOLD`             |Do not rewrite linker program to `mold`       |
+|Name                               |Description                                                        |
+|:----------------------------------|:------------------------------------------------------------------|
+|`CREW_PRELOAD_VERBOSE`             |Enable verbose logging                                             |
+|`CREW_PRELOAD_ENABLE_COMPILE_HACKS`|Enable hacks that help compile (see above)                         |
+|`CREW_PRELOAD_NO_CREW_CMD`         |Do not redirect `/bin/{bash,sh,coreutils}`                         |
+|`CREW_PRELOAD_NO_CREW_GLIBC`       |Do not run executables with Chromebrew's dynamic linker by default |
+|`CREW_PRELOAD_NO_MOLD`             |Do not rewrite linker program to `mold`                            |
 
 ### Usage
 ```shell
 cc -O3 -fPIC -shared -fvisibility=hidden -Wl,-soname,crew-preload.so \
   -DCREW_PREFIX=\"...\" -DCREW_GLIBC_PREFIX=\"...\" \
-  -DCREW_GLIBC_INTERPRETER=\"...\" -DSYSTEM_GLIBC_INTERPRETER=\"...\" \
+  -DCREW_GLIBC_INTERPRETER=\"...\" \
   crew-preload.c -o crew-preload.so
 
 LD_PRELOAD=crew-preload.so <command>

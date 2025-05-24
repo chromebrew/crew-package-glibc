@@ -1,0 +1,93 @@
+From f0ac20455ace24d488d019c92879a234f2d4968e Mon Sep 17 00:00:00 2001
+From: SupeChicken666 <me@supechicken666.dev>
+Date: Sat, 24 May 2025 17:34:19 +0000
+Subject: [PATCH 3/3] Always search glibc libraries in CREW_GLIBC_PREFIX
+
+Signed-off-by: SupeChicken666 <me@supechicken666.dev>
+---
+ elf/dl-load.c | 55 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 55 insertions(+)
+
+diff --git a/elf/dl-load.c b/elf/dl-load.c
+index f905578a..fc5c0449 100644
+--- a/elf/dl-load.c
++++ b/elf/dl-load.c
+@@ -114,6 +114,40 @@ static const size_t system_dirs_len[] =
+ };
+ #define nsystem_dirs_len array_length (system_dirs_len)
+ 
++static const char *glibc_libraries[] = {
++  "libBrokenLocale.so.1",
++  "libanl.so.1",
++  "libc.so.6",
++  "libc_malloc_debug.so.0",
++  "libdl.so.2",
++  "libm.so.6",
++  "libmemusage.so",
++  "libmvec.so.1",
++  "libnsl.so.1",
++  "libnss_compat.so.2",
++  "libnss_db.so.2",
++  "libnss_dns.so.2",
++  "libnss_files.so.2",
++  "libnss_hesiod.so.2",
++  "libpcprofile.so",
++  "libpthread.so.0",
++  "libresolv.so.2",
++  "librt.so.1",
++  "libthread_db.so.1",
++  "libutil.so.1"
++};
++
++static const char *_basename(const char *path) {
++  int i = 0, last_slash_index = -1;
++
++  while (path[i] != '\0') {
++    if (path[i] == '/') last_slash_index = i;
++    i++;
++  }
++
++  return &path[(last_slash_index != -1) ? last_slash_index + 1 : 0];
++};
++
+ static bool
+ is_trusted_path_normalize (const char *path, size_t len)
+ {
+@@ -1547,6 +1581,17 @@ open_verify (const char *name, int fd,
+   /* Initialize it to make the compiler happy.  */
+   const char *errstring = NULL;
+   int errval = 0;
++  const char *libname = _basename(name);
++
++  for (int i = 0; i < sizeof(glibc_libraries) / sizeof(char *); i++) {
++    if (strcmp(libname, glibc_libraries[i]) == 0) {
++      name = malloc(PATH_MAX);
++
++      strcpy((char *) name, CREW_GLIBC_PREFIX "/");
++      strcat((char *) name, libname);
++    }
++  }
++
+ 
+ #ifdef SHARED
+   /* Give the auditing libraries a chance.  */
+@@ -1943,6 +1988,16 @@ _dl_map_object (struct link_map *loader, const char *name,
+ 
+   /* Will be true if we found a DSO which is of the other ELF class.  */
+   bool found_other_class = false;
++  const char *libname = _basename(name);
++
++  for (int i = 0; i < sizeof(glibc_libraries) / sizeof(char *); i++) {
++    if (strcmp(libname, glibc_libraries[i]) == 0) {
++      name = (char *) malloc(PATH_MAX);
++
++      strcpy((char *) name, CREW_GLIBC_PREFIX "/");
++      strcat((char *) name, libname);
++    }
++  }
+ 
+ #ifdef SHARED
+   /* Give the auditing libraries a chance to change the name before we
+-- 
+2.49.0
+
