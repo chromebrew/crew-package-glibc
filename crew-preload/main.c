@@ -337,12 +337,6 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
       unsetenvfp(new_envp, "LD_PRELOAD");
 
       if (elf_info.is_64bit) {
-        if (strcmp(kernel_info.machine, "aarch64") != 0 && strcmp(kernel_info.machine, "x86_64") != 0) {
-          // return ENOEXEC if the system doesn't support 64-bit executables
-          // ENOEXEC: Exec format error
-          return ENOEXEC;
-        }
-
         // execute 64-bit binaries with 64-bit version of crew-preload.so
         asprintf(&new_envp[envc - 1], "LD_PRELOAD=%s/lib64/crew-preload.so", CREW_PREFIX);
       } else {
