@@ -39,6 +39,7 @@
 #include "./main.h"
 
 bool  compile_hacks = false,
+      disabled      = false,
       initialized   = false,
       no_crew_cmd   = false,
       no_crew_glibc = false,
@@ -70,29 +71,52 @@ const char *system_exe_path[] = {
   "/sbin/"
 };
 
-static int (*orig_execve)(const char *pathname, char *const *argv, char *const *envp);
-static int (*orig_posix_spawn)(pid_t *pid, const char *pathname,
-                               const posix_spawn_file_actions_t *file_actions,
-                               const posix_spawnattr_t *attrp,
-                               char *const *argv, char *const *envp);
+int (*orig_execl)(const char *path, const char *arg, ...);
+int (*orig_execle)(const char *path, const char *arg, ...);
+int (*orig_execlp)(const char *path, const char *arg, ...);
+int (*orig_execv)(const char *path, char *const *argv);
+int (*orig_execve)(const char *path, char *const *argv, char *const *envp);
+int (*orig_execvp)(const char *file, char *const *argv);
+int (*orig_execvpe)(const char *file, char *const *argv, char *const *envp);
+int (*orig_posix_spawn)(pid_t *pid, const char *path,
+                        const posix_spawn_file_actions_t *file_actions,
+                        const posix_spawnattr_t *attrp,
+                        char *const *argv, char *const *envp);
+int (*orig_posix_spawnp)(pid_t *pid, const char *file,
+                         const posix_spawn_file_actions_t *file_actions,
+                         const posix_spawnattr_t *attrp,
+                         char *const *argv, char *const *envp);
 
 void preload_init(void) {
   char *old_library_path = getenv("CREW_PRELOAD_LIBRARY_PATH");
 
   if (uname(&kernel_info) == -1) fprintf(stderr, "[PID %-7i] %s: uname() failed (%s)\n", pid, PROMPT_NAME, strerror(errno));
 
+  if (strcmp(getenv("CREW_PRELOAD_DISABLED") ?: "0", "1") == 0)             disabled      = true;
   if (strcmp(getenv("CREW_PRELOAD_ENABLE_COMPILE_HACKS") ?: "0", "1") == 0) compile_hacks = true;
   if (strcmp(getenv("CREW_PRELOAD_NO_CREW_CMD") ?: "0", "1") == 0)          no_crew_cmd   = true;
   if (strcmp(getenv("CREW_PRELOAD_NO_CREW_GLIBC") ?: "0", "1") == 0)        no_crew_glibc = true;
   if (strcmp(getenv("CREW_PRELOAD_NO_MOLD") ?: "0", "1") == 0)              no_mold       = true;
   if (strcmp(getenv("CREW_PRELOAD_VERBOSE") ?: "0", "1") == 0)              verbose       = true;
 
-  pid              = getpid();
-  orig_execve      = dlsym(RTLD_NEXT, "execve");
-  orig_posix_spawn = dlsym(RTLD_NEXT, "posix_spawn");
-  initialized      = true;
+  pid               = getpid();
+  orig_execl        = dlsym(RTLD_NEXT, "execl");
+  orig_execle       = dlsym(RTLD_NEXT, "execle");
+  orig_execlp       = dlsym(RTLD_NEXT, "execlp");
+  orig_execv        = dlsym(RTLD_NEXT, "execv");
+  orig_execve       = dlsym(RTLD_NEXT, "execve");
+  orig_execvp       = dlsym(RTLD_NEXT, "execvp");
+  orig_execvpe      = dlsym(RTLD_NEXT, "execvpe");
+  orig_posix_spawn  = dlsym(RTLD_NEXT, "posix_spawn");
+  orig_posix_spawnp = dlsym(RTLD_NEXT, "posix_spawnp");
+  initialized       = true;
 
   if (verbose) fprintf(stderr, "[PID %-7i] %s: Running on %s kernel, glibc version %s\n", pid, PROMPT_NAME, kernel_info.machine, gnu_get_libc_version());
+
+  if (disabled) {
+    fprintf(stderr, "[PID %-7i] %s: Disabled via environment variable\n", pid, PROMPT_NAME);
+    return;
+  }
 
   // restore LD_LIBRARY_PATH from CREW_PRELOAD_LIBRARY_PATH if it was unset previously by LD_PRELOAD in the parent process
   if (old_library_path) {
@@ -207,17 +231,22 @@ void get_elf_information(void *executable, off_t elf_size, struct ElfInfo *outpu
   return;
 }
 
-void unsetenvfp(char **envp, char *name) {
+int unsetenvfp(char **envp, char *name) {
   // unsetenvfp: Remove specific environment variable from given environ pointer
-  int name_len = strlen(name);
+  int i, name_len = strlen(name);
 
-  for (int i = 0; envp[i]; i++) {
+  for (i = 0; envp[i]; i++) {
     if (strncmp(envp[i], name, name_len) == 0) {
       int j;
-      for (j = i + 1; envp[j]; j++) envp[j - 1] = envp[j];
+
+      for (j = i; envp[j + 1]; j++) envp[j] = envp[j + 1];
       envp[j] = NULL;
+
+      return j;
     }
   }
+
+  return i;
 }
 
 int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
@@ -271,6 +300,16 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
     if (ret != 0) return ret;
   }
 
+  // don't do anything when CREW_PRELOAD_DISABLED=1
+  if (disabled) {
+    if (pid_p == NULL) {
+      return orig_execve(final_exec, argv, envp);
+    } else {
+      return orig_posix_spawn((pid_t *) pid_p, final_exec, (const posix_spawn_file_actions_t *) file_actions,
+                              (const posix_spawnattr_t *) attrp, argv, envp);
+    }
+  }
+
   stat(final_exec, &file_info);
 
   // check if path is directory
@@ -300,9 +339,8 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
   if (strcmp(filename, "libc.so.6") == 0) {
     if (verbose) fprintf(stderr, "[PID %-7i] %s: libc.so.6 detected, will execute with LD_* unset...\n", pid, PROMPT_NAME);
 
-    unsetenvfp(new_envp, "LD_LIBRARY_PATH");
-    unsetenvfp(new_envp, "LD_PRELOAD");
-    envc--;
+    envc = unsetenvfp(new_envp, "LD_LIBRARY_PATH");
+    envc = unsetenvfp(new_envp, "LD_PRELOAD");
   } else {
     // check if executable is a system command or not
     for (int i = 0; i < (int) (sizeof(system_exe_path) / sizeof(char *)); i++) {
@@ -334,13 +372,13 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
       get_elf_information(exec_in_mem, file_info.st_size, &elf_info);
 
       // update LD_PRELOAD value if needed
-      unsetenvfp(new_envp, "LD_PRELOAD");
+      envc = unsetenvfp(new_envp, "LD_PRELOAD");
 
       if (elf_info.is_64bit) {
         // execute 64-bit binaries with 64-bit version of crew-preload.so
-        asprintf(&new_envp[envc - 1], "LD_PRELOAD=%s/lib64/crew-preload.so", CREW_PREFIX);
+        asprintf(&new_envp[envc++], "LD_PRELOAD=%s/lib64/crew-preload.so", CREW_PREFIX);
       } else {
-        asprintf(&new_envp[envc - 1], "LD_PRELOAD=%s/lib/crew-preload.so", CREW_PREFIX);
+        asprintf(&new_envp[envc++], "LD_PRELOAD=%s/lib/crew-preload.so", CREW_PREFIX);
       }
 
       new_envp[envc] = NULL;
@@ -350,7 +388,7 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
       if (is_system && elf_info.is_dyn_exec) {
         if (verbose) fprintf(stderr, "[PID %-7i] %s: System command detected, will execute with LD_LIBRARY_PATH unset...\n", pid, PROMPT_NAME);
 
-        unsetenvfp(new_envp, "LD_LIBRARY_PATH");
+        envc = unsetenvfp(new_envp, "LD_LIBRARY_PATH");
         asprintf(&new_envp[envc++], "CREW_PRELOAD_LIBRARY_PATH=%s", getenv("LD_LIBRARY_PATH"));
         new_envp[envc] = NULL;
       }

@@ -84,7 +84,23 @@ struct ElfInfo {
 
 extern char **environ;
 
-extern bool initialized;
+extern bool disabled, initialized;
+
+extern int (*orig_execl)(const char *path, const char *arg, ...);
+extern int (*orig_execle)(const char *path, const char *arg, ...);
+extern int (*orig_execlp)(const char *path, const char *arg, ...);
+extern int (*orig_execv)(const char *path, char *const *argv);
+extern int (*orig_execve)(const char *path, char *const *argv, char *const *envp);
+extern int (*orig_execvp)(const char *file, char *const *argv);
+extern int (*orig_execvpe)(const char *file, char *const *argv, char *const *envp);
+extern int (*orig_posix_spawn)(pid_t *pid, const char *path,
+                               const posix_spawn_file_actions_t *file_actions,
+                               const posix_spawnattr_t *attrp,
+                               char *const *argv, char *const *envp);
+extern int (*orig_posix_spawnp)(pid_t *pid, const char *file,
+                                const posix_spawn_file_actions_t *file_actions,
+                                const posix_spawnattr_t *attrp,
+                                char *const *argv, char *const *envp);
 
 void preload_init(void) __attribute__ ((constructor));
 int  count_args(va_list argp);

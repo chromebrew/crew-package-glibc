@@ -30,6 +30,7 @@ If `CREW_PRELOAD_ENABLE_COMPILE_HACKS` is set, this wrapper will also:
 |Name                               |Description                                                        |
 |:----------------------------------|:------------------------------------------------------------------|
 |`CREW_PRELOAD_VERBOSE`             |Enable verbose logging                                             |
+|`CREW_PRELOAD_DISABLED`            |Disable all hacks, will not do anything besides initializing       |
 |`CREW_PRELOAD_ENABLE_COMPILE_HACKS`|Enable hacks that help compile (see above)                         |
 |`CREW_PRELOAD_NO_CREW_CMD`         |Do not redirect `/bin/{bash,sh,coreutils}`                         |
 |`CREW_PRELOAD_NO_CREW_GLIBC`       |Do not run executables with Chromebrew's dynamic linker by default |
