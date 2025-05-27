@@ -33,7 +33,7 @@
   cc -O3 -fPIC -shared -fvisibility=hidden -Wl,-soname,crew-preload.so \
     -DCREW_PREFIX=\"...\" -DCREW_GLIBC_PREFIX=\"...\" \
     -DCREW_GLIBC_INTERPRETER=\"...\" \
-    crew-preload.c -o crew-preload.so
+    main.c hooks.c -o crew-preload.so
 */
 
 #include "./main.h"
