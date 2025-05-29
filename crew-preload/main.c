@@ -51,10 +51,8 @@ struct utsname kernel_info;
 
 const char *cmd_override_list[] = {
   "/bin/bash",
-  "/bin/env",
   "/bin/sh",
-  "/usr/bin/coreutils",
-  "/usr/bin/env"
+  "/usr/bin/coreutils"
 };
 
 const char *linkers[] = {
@@ -310,6 +308,12 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
       return orig_posix_spawn((pid_t *) pid_p, final_exec, (const posix_spawn_file_actions_t *) file_actions,
                               (const posix_spawnattr_t *) attrp, argv, envp);
     }
+  }
+
+  // fully resolve the executable path first before we do anything
+  if (realpath(strdup(final_exec), final_exec) == NULL) {
+    if (verbose) fprintf(stderr, "[PID %-7i] %s: realpath() failed (%s)\n", pid, PROMPT_NAME, strerror(errno));
+    return errno;
   }
 
   stat(final_exec, &file_info);
