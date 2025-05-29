@@ -51,8 +51,10 @@ struct utsname kernel_info;
 
 const char *cmd_override_list[] = {
   "/bin/bash",
+  "/bin/env",
   "/bin/sh",
-  "/usr/bin/coreutils"
+  "/usr/bin/coreutils",
+  "/usr/bin/env"
 };
 
 const char *linkers[] = {
