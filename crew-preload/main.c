@@ -218,7 +218,10 @@ void get_elf_information(void *executable, off_t elf_size, struct ElfInfo *outpu
         output->interpreter = (char *) (executable + ((Elf32_Phdr *) program_header)->p_offset);
       }
 
-      if (verbose) fprintf(stderr, "[PID %-7i] %s: PT_INTERP section found at offset 0x%lx (%s)\n", pid, PROMPT_NAME, program_header - executable, output->interpreter);
+      if (verbose) {
+        fprintf(stderr, "[PID %-7i] %s: PT_INTERP section found at offset 0x%lx (%s)\n", pid, PROMPT_NAME, (unsigned long int) (program_header - executable), output->interpreter);
+      }
+
       return;
     }
 
