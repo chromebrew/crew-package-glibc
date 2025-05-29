@@ -27,9 +27,10 @@
 #include <linux/limits.h>
 #include <sys/auxv.h>
 #include <sys/mman.h>
-#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/utsname.h>
+
+#include "legacy-stat.h"
 
 #ifndef SYS_memfd_create
 #if defined(__arm__)
