@@ -31,7 +31,7 @@
 #include <sys/stat.h>
 
 #ifndef _STAT_VER
-#define _STAT_VER 0
+#define _STAT_VER 3
 #endif
 
 /* Wrappers for stat and mknod system calls.  */

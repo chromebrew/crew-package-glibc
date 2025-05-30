@@ -370,7 +370,7 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
     return errno;
   }
 
-  stat(final_exec, &file_info);
+  if (stat(final_exec, &file_info) == -1) fprintf(stderr, "[PID %-7i] %s: stat() failed for %s (%s)\n", pid, PROMPT_NAME, final_exec, strerror(errno));
 
   // check if path is directory
   if (S_ISDIR(file_info.st_mode)) return EISDIR;
@@ -425,7 +425,7 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
     if ((exec_fd = open(final_exec, O_RDONLY | O_CLOEXEC)) == -1) {
       if (verbose) fprintf(stderr, "[PID %-7i] %s: Failed to open %s for reading (%s)\n", pid, PROMPT_NAME, final_exec, strerror(errno));
     } else {
-      fstat(exec_fd, &file_info);
+      if (fstat(exec_fd, &file_info) == -1) fprintf(stderr, "[PID %-7i] %s: fstat() failed for %s (%s)\n", pid, PROMPT_NAME, final_exec, strerror(errno));
 
       // map the executable into memory region for convenience
       exec_in_mem = mmap(NULL, file_info.st_size + PATH_MAX, PROT_READ | PROT_WRITE, MAP_PRIVATE, exec_fd, 0);
