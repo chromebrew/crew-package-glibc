@@ -30,10 +30,17 @@
 
   Usage: LD_PRELOAD=crew-preload.so <command>
 
-  cc -Wall -Wextra -Wundef -O3 -fPIC -shared -fvisibility=hidden -Wl,-soname,crew-preload.so \
-    -DCREW_PREFIX=\"...\" -DCREW_GLIBC_PREFIX=\"...\" \
-    -DCREW_GLIBC_INTERPRETER=\"...\" \
-    main.c hooks.c -o crew-preload.so
+  For armv7l/i686/x86_64:
+
+    cc -Wall -Wextra -Wundef -O3 -fPIC -shared -fvisibility=hidden -Wl,-soname,crew-preload.so \
+      -DCREW_PREFIX=\"...\" -DCREW_GLIBC_PREFIX=\"...\" -DCREW_GLIBC_INTERPRETER=\"...\" \
+      ../prebuilt/<ARCH>/lib{c,dl}-*.so* main.c hooks.c -o crew-preload.so
+
+  For aarch64:
+
+    cc -Wall -Wextra -Wundef -O3 -fPIC -shared -fvisibility=hidden -Wl,-soname,crew-preload.so \
+      -DCREW_PREFIX=\"...\" -DCREW_GLIBC_PREFIX=\"...\" -DCREW_GLIBC_INTERPRETER=\"...\" \
+      -lc -ldl main.c hooks.c -o crew-preload.so
 */
 
 #include "./main.h"

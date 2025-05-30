@@ -36,23 +36,20 @@ If `CREW_PRELOAD_ENABLE_COMPILE_HACKS` is set, this wrapper will also:
 |`CREW_PRELOAD_NO_CREW_GLIBC`       |Do not run executables with Chromebrew's dynamic linker by default |
 |`CREW_PRELOAD_NO_MOLD`             |Do not rewrite linker program to `mold`                            |
 
-### Usage
+### Building
 ```shell
+# For armv7l/i686/x86_64
 cc -Wall -Wextra -Wundef -O3 -fPIC -shared -fvisibility=hidden -Wl,-soname,crew-preload.so \
-  -DCREW_PREFIX=\"...\" -DCREW_GLIBC_PREFIX=\"...\" \
-  -DCREW_GLIBC_INTERPRETER=\"...\" \
-  main.c hooks.c -o crew-preload.so
+  -DCREW_PREFIX=\"...\" -DCREW_GLIBC_PREFIX=\"...\" -DCREW_GLIBC_INTERPRETER=\"...\" \
+  ../prebuilt/<ARCH>/lib{c,dl}-*.so* main.c hooks.c -o crew-preload.so
 
-LD_PRELOAD=crew-preload.so <command>
+# For aarch64
+cc -Wall -Wextra -Wundef -O3 -fPIC -shared -fvisibility=hidden -Wl,-soname,crew-preload.so \
+  -DCREW_PREFIX=\"...\" -DCREW_GLIBC_PREFIX=\"...\" -DCREW_GLIBC_INTERPRETER=\"...\" \
+  -lc -ldl main.c hooks.c -o crew-preload.so
 ```
 
-#### Building may require this command on i686:
+### Usage
 ```shell
-cc -Wall -Wextra -Wundef -O3 -fPIC -shared -fvisibility=hidden -Wl,-soname,crew-preload.so \
-   -DCREW_PREFIX=\"...\" -DCREW_GLIBC_PREFIX=\"...\" \
-   -DCREW_GLIBC_INTERPRETER=\"...\" \
-   -Wl,--no-as-needed -ldl \
-   main.c hooks.c -o crew-preload.so
-
 LD_PRELOAD=crew-preload.so <command>
 ```
