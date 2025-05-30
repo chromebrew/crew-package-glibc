@@ -30,9 +30,21 @@
 #ifndef _LEGACY_STAT_H
 #include <sys/stat.h>
 
-#ifndef _STAT_VER
-#define _STAT_VER 3
+/* Versions of the `struct stat' data structure.  */
+#if defined(__i386__)
+# define _STAT_VER_LINUX_OLD    1
+# define _STAT_VER_KERNEL       1
+# define _STAT_VER_SVR4         2
+# define _STAT_VER_LINUX        3
+#elif defined(__x86_64__)
+# define _STAT_VER_KERNEL       0
+# define _STAT_VER_LINUX        1
+#else
+# define _STAT_VER_KERNEL       0
+# define _STAT_VER_LINUX        0
 #endif
+
+#define _STAT_VER               _STAT_VER_LINUX
 
 /* Wrappers for stat and mknod system calls.  */
 #ifndef __USE_FILE_OFFSET64

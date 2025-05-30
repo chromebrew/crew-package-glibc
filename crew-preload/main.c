@@ -252,6 +252,7 @@ void change_elf_interpreter(char *exec_path, int memfd, void *exec_in_mem, struc
     After:
 
         | ELF header | Program headers | Sections | New interpreter path | Section headers |
+
   */
 
   if (verbose) fprintf(stderr, "[PID %-7i] %s: Modifying ELF interpreter path for %s...\n", pid, PROMPT_NAME, exec_path);
@@ -466,7 +467,8 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
         // modify ELF interpreter path (in-memory only) to Chromebrew's glibc before executing if needed
         if (!no_crew_glibc && exec_in_mem && elf_info.is_dyn_exec &&
             elf_info.is_64bit == CREW_GLIBC_IS_64BIT &&
-            strcmp(elf_info.interpreter, CREW_GLIBC_INTERPRETER) != 0) {
+            strcmp(elf_info.interpreter, CREW_GLIBC_INTERPRETER) != 0 &&
+            access(CREW_GLIBC_INTERPRETER, X_OK) == 0) {
 
           int memfd = syscall(SYS_memfd_create, final_exec, 1);
 
