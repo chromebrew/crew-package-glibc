@@ -49,10 +49,8 @@
 #endif
 
 #ifndef CREW_GLIBC_INTERPRETER
-#if defined(__arm__)
+#if defined(__arm__) || defined(__aarch64__)
 #define CREW_GLIBC_INTERPRETER "/usr/local/opt/glibc-libs/ld-linux-armhf.so.3"
-#elif defined(__aarch64__)
-#define CREW_GLIBC_INTERPRETER "/usr/local/opt/glibc-libs/ld-linux-aarch64.so.1"
 #elif defined(__i386__)
 #define CREW_GLIBC_INTERPRETER "/usr/local/opt/glibc-libs/ld-linux.so.2"
 #elif defined(__x86_64__)
