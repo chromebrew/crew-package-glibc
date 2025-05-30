@@ -30,7 +30,7 @@
 
   Usage: LD_PRELOAD=crew-preload.so <command>
 
-  cc -O3 -fPIC -shared -fvisibility=hidden -Wl,-soname,crew-preload.so \
+  cc -Wall -Wextra -Wundef -O3 -fPIC -shared -fvisibility=hidden -Wl,-soname,crew-preload.so \
     -DCREW_PREFIX=\"...\" -DCREW_GLIBC_PREFIX=\"...\" \
     -DCREW_GLIBC_INTERPRETER=\"...\" \
     main.c hooks.c -o crew-preload.so
@@ -160,16 +160,14 @@ int search_in_path(const char *file, char *result) {
   // search_in_path: search given filename in PATH environment variable,
   //                 full path will be written to the memory address that is pointed by the `result` pointer
   const char *path_env;
-  char       cs_path[PATH_MAX * 32], strtok_buf[PATH_MAX], *search_path;
+  char       cs_path[PATH_MAX * 32], *search_path;
   int        return_value;
 
   confstr(_CS_PATH, cs_path, sizeof(cs_path));
 
   return_value = ENOENT;
   path_env     = getenv("PATH") ?: cs_path;
-
-  strncpy(strtok_buf, path_env, PATH_MAX);
-  search_path = strtok(strtok_buf, ":");
+  search_path  = strtok(strdup(path_env), ":");
 
   do {
     snprintf(result, PATH_MAX, "%s/%s", search_path, file);
@@ -232,6 +230,59 @@ void get_elf_information(void *executable, off_t elf_size, struct ElfInfo *outpu
   if (verbose) fprintf(stderr, "[PID %-7i] %s: PT_INTERP section not found, probably linked statically\n", pid, PROMPT_NAME);
   output->is_dyn_exec = false;
   return;
+}
+
+void change_elf_interpreter(char *exec_path, int memfd, void *exec_in_mem, struct ElfInfo *elf_info) {
+  int  old_section_header_size = 0;
+  void *old_section_header     = NULL;
+
+  /*
+    allocate room between the last ELF section and the first section header for our new interpreter's path
+    Before:
+
+        | ELF header | Program headers | Sections | Section headers |
+
+    After:
+
+        | ELF header | Program headers | Sections | New interpreter path | Section headers |
+  */
+
+  if (verbose) fprintf(stderr, "[PID %-7i] %s: Modifying ELF interpreter path for %s...\n", pid, PROMPT_NAME, exec_path);
+
+  if (elf_info->is_64bit) {
+    old_section_header      = exec_in_mem + ((Elf64_Ehdr *) exec_in_mem)->e_shoff;
+    old_section_header_size = elf_info->size - ((Elf64_Ehdr *) exec_in_mem)->e_shoff;
+
+    // update section header offset and point PT_INTERP to our new interpreter string
+    ((Elf64_Ehdr *) exec_in_mem)->e_shoff                  = elf_info->size + sizeof(CREW_GLIBC_INTERPRETER) - old_section_header_size;
+    ((Elf64_Phdr *) elf_info->pt_interp_section)->p_offset = elf_info->size - old_section_header_size;
+    ((Elf64_Phdr *) elf_info->pt_interp_section)->p_paddr  = elf_info->size - old_section_header_size;
+    ((Elf64_Phdr *) elf_info->pt_interp_section)->p_vaddr  = elf_info->size - old_section_header_size;
+    ((Elf64_Phdr *) elf_info->pt_interp_section)->p_filesz = sizeof(CREW_GLIBC_INTERPRETER);
+    ((Elf64_Phdr *) elf_info->pt_interp_section)->p_memsz  = sizeof(CREW_GLIBC_INTERPRETER);
+  } else {
+    old_section_header      = exec_in_mem + ((Elf32_Ehdr *) exec_in_mem)->e_shoff;
+    old_section_header_size = elf_info->size - ((Elf32_Ehdr *) exec_in_mem)->e_shoff;
+
+    // update section header offset and point PT_INTERP to our new interpreter string
+    ((Elf32_Ehdr *) exec_in_mem)->e_shoff                  = elf_info->size + sizeof(CREW_GLIBC_INTERPRETER) - old_section_header_size;
+    ((Elf32_Phdr *) elf_info->pt_interp_section)->p_offset = elf_info->size - old_section_header_size;
+    ((Elf32_Phdr *) elf_info->pt_interp_section)->p_paddr  = elf_info->size - old_section_header_size;
+    ((Elf32_Phdr *) elf_info->pt_interp_section)->p_vaddr  = elf_info->size - old_section_header_size;
+    ((Elf32_Phdr *) elf_info->pt_interp_section)->p_filesz = sizeof(CREW_GLIBC_INTERPRETER);
+    ((Elf32_Phdr *) elf_info->pt_interp_section)->p_memsz  = sizeof(CREW_GLIBC_INTERPRETER);
+  }
+
+  if (verbose) fprintf(stderr, "[PID %-7i] %s: New PT_INTERP for %s: %s\n", pid, PROMPT_NAME, exec_path, CREW_GLIBC_INTERPRETER);
+  if (verbose) fprintf(stderr, "[PID %-7i] %s: Writing modified executable into memfd %i...\n", pid, PROMPT_NAME, memfd);
+
+  // write modified executable with updated PT_INTERP segment to memfd
+  write(memfd, exec_in_mem, elf_info->size - old_section_header_size);
+  write(memfd, CREW_GLIBC_INTERPRETER, sizeof(CREW_GLIBC_INTERPRETER));
+  write(memfd, old_section_header, old_section_header_size);
+
+  snprintf(exec_path, PATH_MAX, "/proc/self/fd/%i", memfd);
+  if (verbose) fprintf(stderr, "[PID %-7i] %s: New executable path: %s\n", pid, PROMPT_NAME, exec_path);
 }
 
 int unsetenvfp(char **envp, char *name) {
@@ -378,32 +429,58 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
 
       // map the executable into memory region for convenience
       exec_in_mem = mmap(NULL, file_info.st_size + PATH_MAX, PROT_READ | PROT_WRITE, MAP_PRIVATE, exec_fd, 0);
-      get_elf_information(exec_in_mem, file_info.st_size, &elf_info);
 
-      // update LD_PRELOAD value if needed
-      envc = unsetenvfp(new_envp, "LD_PRELOAD");
+      if (memcmp(exec_in_mem, "\x7f""ELF", 4) == 0) {
+        elf_info.size = file_info.st_size;
+        get_elf_information(exec_in_mem, file_info.st_size, &elf_info);
 
-      if (elf_info.is_64bit) {
-        // execute 64-bit binaries with 64-bit version of crew-preload.so
-        asprintf(&new_envp[envc++], "LD_PRELOAD=%s/lib64/crew-preload.so", CREW_PREFIX);
-      } else {
-        asprintf(&new_envp[envc++], "LD_PRELOAD=%s/lib/crew-preload.so", CREW_PREFIX);
-      }
+        // update LD_PRELOAD value if needed
+        envc = unsetenvfp(new_envp, "LD_PRELOAD");
 
-      new_envp[envc] = NULL;
+        if (elf_info.is_64bit) {
+          // execute 64-bit binaries with 64-bit version of crew-preload.so
+          asprintf(&new_envp[envc++], "LD_PRELOAD=%s/lib64/crew-preload.so", CREW_PREFIX);
+        } else {
+          asprintf(&new_envp[envc++], "LD_PRELOAD=%s/lib/crew-preload.so", CREW_PREFIX);
+        }
 
-      // unset LD_LIBRARY_PATH for system commands, original value will be copied into CREW_PRELOAD_LIBRARY_PATH environment variable
-      // (see https://github.com/chromebrew/chromebrew/issues/5777 for more information)
-      if (is_system && elf_info.is_dyn_exec) {
-        if (verbose) fprintf(stderr, "[PID %-7i] %s: System command detected, will execute with LD_LIBRARY_PATH unset...\n", pid, PROMPT_NAME);
-
-        envc = unsetenvfp(new_envp, "LD_LIBRARY_PATH");
-        asprintf(&new_envp[envc++], "CREW_PRELOAD_LIBRARY_PATH=%s", getenv("LD_LIBRARY_PATH"));
         new_envp[envc] = NULL;
-      }
 
-      // parse shebang and re-execute with specified interpreter if the executable is a script
-      if (memcmp(exec_in_mem, "#!", 2) == 0) {
+        // unset LD_LIBRARY_PATH for system commands, original value will be copied into CREW_PRELOAD_LIBRARY_PATH environment variable
+        // (see https://github.com/chromebrew/chromebrew/issues/5777 for more information)
+        if (is_system && elf_info.is_dyn_exec) {
+          if (verbose) fprintf(stderr, "[PID %-7i] %s: System command detected, will execute with LD_LIBRARY_PATH unset...\n", pid, PROMPT_NAME);
+
+          envc = unsetenvfp(new_envp, "LD_LIBRARY_PATH");
+          asprintf(&new_envp[envc++], "CREW_PRELOAD_LIBRARY_PATH=%s", getenv("LD_LIBRARY_PATH"));
+          new_envp[envc] = NULL;
+        }
+
+        // modify ELF interpreter path (in-memory only) to Chromebrew's glibc before executing if needed
+        if (!no_crew_glibc && exec_in_mem && elf_info.is_dyn_exec &&
+            elf_info.is_64bit == CREW_GLIBC_IS_64BIT &&
+            strcmp(elf_info.interpreter, CREW_GLIBC_INTERPRETER) != 0) {
+
+          int memfd = syscall(SYS_memfd_create, final_exec, 1);
+
+          if (verbose) fprintf(stderr, "[PID %-7i] %s: Will execute %s with Chromebrew's dynamic linker\n", pid, PROMPT_NAME, final_exec);
+
+          if (memfd > 0) {
+            change_elf_interpreter(final_exec, memfd, exec_in_mem, &elf_info);
+          } else {
+            // fallback to legacy ld-linux.so way for systems that don't support memfd_create()
+            // load and run executable using Chromebrew's dynamic linker
+            new_argv[0] = CREW_GLIBC_INTERPRETER;
+            new_argv[1] = strdup(final_exec);
+
+            copy2array(&argv[1], new_argv, 2);
+            strncpy(final_exec, CREW_GLIBC_INTERPRETER, PATH_MAX);
+
+            if (verbose) fprintf(stderr, "[PID %-7i] %s: Will execute as: %s %s %.20s...\n", pid, PROMPT_NAME, new_argv[0], new_argv[1], new_argv[2]);
+          }
+        }
+      } else if (memcmp(exec_in_mem, "#!", 2) == 0) {
+        // parse shebang and re-execute with specified interpreter if the executable is a script
         char shebang[PATH_MAX], *script_path, *interpreter_opt;
 
         strncpy(shebang, exec_in_mem + 2, (strcspn(exec_in_mem + 2, "\n") < PATH_MAX) ? strcspn(exec_in_mem + 2, "\n") : PATH_MAX);
@@ -465,76 +542,6 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
         new_argv[argc++] = "--dynamic-linker";
         new_argv[argc++] = CREW_GLIBC_INTERPRETER;
         new_argv[argc]   = NULL;
-      }
-    }
-
-    // modify ELF interpreter path (in-memory only) to Chromebrew's glibc before executing if needed
-    if (!no_crew_glibc && exec_in_mem && elf_info.is_dyn_exec &&
-        elf_info.is_64bit == CREW_GLIBC_IS_64BIT &&
-        strcmp(elf_info.interpreter, CREW_GLIBC_INTERPRETER) != 0) {
-
-      int   memfd                   = syscall(SYS_memfd_create, final_exec, 1),
-            old_section_header_size = 0;
-      void  *old_section_header     = NULL;
-
-      if (verbose) fprintf(stderr, "[PID %-7i] %s: Will execute %s with Chromebrew's dynamic linker\n", pid, PROMPT_NAME, final_exec);
-
-      if (memfd == -1) {
-        // fallback to legacy ld-linux.so way for systems that don't support memfd_create()
-        // load and run executable using Chromebrew's dynamic linker
-        new_argv[0] = CREW_GLIBC_INTERPRETER;
-        new_argv[1] = strdup(final_exec);
-
-        copy2array(&argv[1], new_argv, 2);
-        strncpy(final_exec, CREW_GLIBC_INTERPRETER, PATH_MAX);
-
-        if (verbose) fprintf(stderr, "[PID %-7i] %s: Will execute as: %s %s %.20s...\n", pid, PROMPT_NAME, new_argv[0], new_argv[1], new_argv[2]);
-      } else {
-        // allocate room between the last ELF section and the first section header for our new interpreter's path
-        // Before:
-        //
-        //   | ELF header | Program headers | Sections | Section headers |
-        //
-        // After:
-        //
-        //   | ELF header | Program headers | Sections | New interpreter path | Section headers |
-        //
-        if (verbose) fprintf(stderr, "[PID %-7i] %s: Modifying ELF interpreter path for %s...\n", pid, PROMPT_NAME, final_exec);
-
-        if (elf_info.is_64bit) {
-          old_section_header      = exec_in_mem + ((Elf64_Ehdr *) exec_in_mem)->e_shoff;
-          old_section_header_size = file_info.st_size - ((Elf64_Ehdr *) exec_in_mem)->e_shoff;
-
-          // update section header offset and point PT_INTERP to our new interpreter string
-          ((Elf64_Ehdr *) exec_in_mem)->e_shoff                 = file_info.st_size + sizeof(CREW_GLIBC_INTERPRETER) - old_section_header_size;
-          ((Elf64_Phdr *) elf_info.pt_interp_section)->p_offset = file_info.st_size - old_section_header_size;
-          ((Elf64_Phdr *) elf_info.pt_interp_section)->p_paddr  = file_info.st_size - old_section_header_size;
-          ((Elf64_Phdr *) elf_info.pt_interp_section)->p_vaddr  = file_info.st_size - old_section_header_size;
-          ((Elf64_Phdr *) elf_info.pt_interp_section)->p_filesz = sizeof(CREW_GLIBC_INTERPRETER);
-          ((Elf64_Phdr *) elf_info.pt_interp_section)->p_memsz  = sizeof(CREW_GLIBC_INTERPRETER);
-        } else {
-          old_section_header      = exec_in_mem + ((Elf32_Ehdr *) exec_in_mem)->e_shoff;
-          old_section_header_size = file_info.st_size - ((Elf32_Ehdr *) exec_in_mem)->e_shoff;
-
-          // update section header offset and point PT_INTERP to our new interpreter string
-          ((Elf32_Ehdr *) exec_in_mem)->e_shoff                 = file_info.st_size + sizeof(CREW_GLIBC_INTERPRETER) - old_section_header_size;
-          ((Elf32_Phdr *) elf_info.pt_interp_section)->p_offset = file_info.st_size - old_section_header_size;
-          ((Elf32_Phdr *) elf_info.pt_interp_section)->p_paddr  = file_info.st_size - old_section_header_size;
-          ((Elf32_Phdr *) elf_info.pt_interp_section)->p_vaddr  = file_info.st_size - old_section_header_size;
-          ((Elf32_Phdr *) elf_info.pt_interp_section)->p_filesz = sizeof(CREW_GLIBC_INTERPRETER);
-          ((Elf32_Phdr *) elf_info.pt_interp_section)->p_memsz  = sizeof(CREW_GLIBC_INTERPRETER);
-        }
-
-        if (verbose) fprintf(stderr, "[PID %-7i] %s: New PT_INTERP for %s: %s\n", pid, PROMPT_NAME, final_exec, CREW_GLIBC_INTERPRETER);
-        if (verbose) fprintf(stderr, "[PID %-7i] %s: Writing modified executable into memfd %i...\n", pid, PROMPT_NAME, memfd);
-
-        // write modified executable with updated PT_INTERP segment to memfd
-        write(memfd, exec_in_mem, file_info.st_size - old_section_header_size);
-        write(memfd, CREW_GLIBC_INTERPRETER, sizeof(CREW_GLIBC_INTERPRETER));
-        write(memfd, old_section_header, old_section_header_size);
-
-        snprintf(final_exec, PATH_MAX, "/proc/self/fd/%i", memfd);
-        if (verbose) fprintf(stderr, "[PID %-7i] %s: New executable path: %s\n", pid, PROMPT_NAME, final_exec);
       }
     }
   }

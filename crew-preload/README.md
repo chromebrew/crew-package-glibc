@@ -38,7 +38,7 @@ If `CREW_PRELOAD_ENABLE_COMPILE_HACKS` is set, this wrapper will also:
 
 ### Usage
 ```shell
-cc -O3 -fPIC -shared -fvisibility=hidden -Wl,-soname,crew-preload.so \
+cc -Wall -Wextra -Wundef -O3 -fPIC -shared -fvisibility=hidden -Wl,-soname,crew-preload.so \
   -DCREW_PREFIX=\"...\" -DCREW_GLIBC_PREFIX=\"...\" \
   -DCREW_GLIBC_INTERPRETER=\"...\" \
   main.c hooks.c -o crew-preload.so
@@ -48,7 +48,7 @@ LD_PRELOAD=crew-preload.so <command>
 
 #### Building may require this command on i686:
 ```shell
-cc -O3 -fPIC -shared -fvisibility=hidden -Wl,-soname,crew-preload.so \
+cc -Wall -Wextra -Wundef -O3 -fPIC -shared -fvisibility=hidden -Wl,-soname,crew-preload.so \
    -DCREW_PREFIX=\"...\" -DCREW_GLIBC_PREFIX=\"...\" \
    -DCREW_GLIBC_INTERPRETER=\"...\" \
    -Wl,--no-as-needed -ldl \
