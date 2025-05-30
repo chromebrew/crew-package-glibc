@@ -31,17 +31,17 @@
 #include <sys/stat.h>
 
 /* Versions of the `struct stat' data structure.  */
-#if defined(__i386__)
-# define _STAT_VER_LINUX_OLD    1
-# define _STAT_VER_KERNEL       1
-# define _STAT_VER_SVR4         2
-# define _STAT_VER_LINUX        3
+#if defined(__aarch64__)
+# define _STAT_VER_KERNEL       0
+# define _STAT_VER_LINUX        0
 #elif defined(__x86_64__)
 # define _STAT_VER_KERNEL       0
 # define _STAT_VER_LINUX        1
 #else
-# define _STAT_VER_KERNEL       0
-# define _STAT_VER_LINUX        0
+# define _STAT_VER_LINUX_OLD    1
+# define _STAT_VER_KERNEL       1
+# define _STAT_VER_SVR4         2
+# define _STAT_VER_LINUX        3
 #endif
 
 #define _STAT_VER               _STAT_VER_LINUX
