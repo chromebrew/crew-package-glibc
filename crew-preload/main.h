@@ -78,8 +78,10 @@ struct ElfInfo {
   bool is_64bit;
   bool is_dyn_exec;
   int  size;
-  char *interpreter;
-  void *pt_interp_section;
+  char *interpreter,
+       *string_table;
+  void *interp_proghdr, // offset of PT_INTERP section in program header
+       *interp_sechdr;  // offset of .interp section in section header
 };
 
 extern char **environ;

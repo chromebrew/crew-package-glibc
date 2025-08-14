@@ -195,8 +195,13 @@ int search_in_path(const char *file, char *result) {
 }
 
 void get_elf_information(void *executable, off_t elf_size, struct ElfInfo *output) {
-  uint8_t phnum;
-  void    *program_header = executable;
+  uint8_t phnum, shnum;
+  void    *program_header = executable,
+          *section_header = executable,
+          *strtab_header  = executable;
+
+  output->interp_proghdr = NULL;
+  output->interp_sechdr  = NULL;
 
   // check if file is ELF
   if (memcmp(executable, "\x7f""ELF", 4) != 0) return;
@@ -210,11 +215,11 @@ void get_elf_information(void *executable, off_t elf_size, struct ElfInfo *outpu
   program_header += output->is_64bit ? ((Elf64_Ehdr *) executable)->e_phoff : ((Elf32_Ehdr *) executable)->e_phoff;
 
   // parse ELF program header
-  for (int i = 1; i < phnum; i++) {
+  for (int i = 0; i < phnum; i++) {
     if (*((uint32_t *) program_header) == 3) {
       // section type 0x03: PT_INTERP
-      output->is_dyn_exec       = true;
-      output->pt_interp_section = program_header;
+      output->is_dyn_exec    = true;
+      output->interp_proghdr = program_header;
 
       // get memory address of interpreter string
       if (output->is_64bit) {
@@ -224,19 +229,48 @@ void get_elf_information(void *executable, off_t elf_size, struct ElfInfo *outpu
       }
 
       if (verbose) {
-        fprintf(stderr, "[PID %-7i] %s: PT_INTERP section found at offset 0x%lx (%s)\n", pid, PROMPT_NAME, (unsigned long int) (program_header - executable), output->interpreter);
+        fprintf(stderr, "[PID %-7i] %s: PT_INTERP section found at offset 0x%lx (%s)\n", pid, PROMPT_NAME, (uintptr_t) (program_header - executable), output->interpreter);
       }
 
-      return;
+      break;
     }
 
     program_header += output->is_64bit ? sizeof(Elf64_Phdr) : sizeof(Elf32_Phdr);
     if ((program_header + (output->is_64bit ? sizeof(Elf64_Phdr) : sizeof(Elf32_Phdr))) > (executable + elf_size)) break;
   }
 
-  if (verbose) fprintf(stderr, "[PID %-7i] %s: PT_INTERP section not found, probably linked statically\n", pid, PROMPT_NAME);
-  output->is_dyn_exec = false;
-  return;
+  // get number of section headers
+  if (output->is_64bit) {
+    section_header       += ((Elf64_Ehdr *) executable)->e_shoff;
+    strtab_header        += ((Elf64_Ehdr *) executable)->e_shoff + ((Elf64_Ehdr *) executable)->e_shentsize * ((Elf64_Ehdr *) executable)->e_shstrndx;
+    shnum                 = ((Elf64_Ehdr *) executable)->e_shnum;
+    output->string_table  = executable + ((Elf64_Shdr *) strtab_header)->sh_offset;
+  } else {
+    section_header       += ((Elf32_Ehdr *) executable)->e_shoff;
+    strtab_header        += ((Elf32_Ehdr *) executable)->e_shoff + ((Elf32_Ehdr *) executable)->e_shentsize * ((Elf32_Ehdr *) executable)->e_shstrndx;
+    shnum                 = ((Elf32_Ehdr *) executable)->e_shnum;
+    output->string_table  = executable + ((Elf32_Shdr *) strtab_header)->sh_offset;
+  }
+
+  // parse ELF section header
+  for (int i = 0; i < shnum; i++) {
+    // search for .interp section header
+    if (strcmp(&output->string_table[*((uint32_t *) section_header)], ".interp") == 0) {
+      output->is_dyn_exec   = true;
+      output->interp_sechdr = section_header;
+
+      if (verbose) fprintf(stderr, "[PID %-7i] %s: .interp section found at offset 0x%lx\n", pid, PROMPT_NAME, (uintptr_t) (section_header - executable));
+      break;
+    }
+
+    section_header += output->is_64bit ? sizeof(Elf64_Shdr) : sizeof(Elf32_Shdr);
+    if ((section_header + (output->is_64bit ? sizeof(Elf64_Shdr) : sizeof(Elf32_Shdr))) > (executable + elf_size)) break;
+  }
+
+  if (verbose && output->interp_proghdr == NULL) {
+    fprintf(stderr, "[PID %-7i] %s: PT_INTERP section not found, probably linked statically\n", pid, PROMPT_NAME);
+    output->is_dyn_exec = false;
+  }
 }
 
 void change_elf_interpreter(char *exec_path, int memfd, void *exec_in_mem, struct ElfInfo *elf_info) {
@@ -261,24 +295,32 @@ void change_elf_interpreter(char *exec_path, int memfd, void *exec_in_mem, struc
     old_section_header      = exec_in_mem + ((Elf64_Ehdr *) exec_in_mem)->e_shoff;
     old_section_header_size = elf_info->size - ((Elf64_Ehdr *) exec_in_mem)->e_shoff;
 
-    // update section header offset and point PT_INTERP to our new interpreter string
-    ((Elf64_Ehdr *) exec_in_mem)->e_shoff                  = elf_info->size + sizeof(CREW_GLIBC_INTERPRETER) - old_section_header_size;
-    ((Elf64_Phdr *) elf_info->pt_interp_section)->p_offset = elf_info->size - old_section_header_size;
-    ((Elf64_Phdr *) elf_info->pt_interp_section)->p_paddr  = elf_info->size - old_section_header_size;
-    ((Elf64_Phdr *) elf_info->pt_interp_section)->p_vaddr  = elf_info->size - old_section_header_size;
-    ((Elf64_Phdr *) elf_info->pt_interp_section)->p_filesz = sizeof(CREW_GLIBC_INTERPRETER);
-    ((Elf64_Phdr *) elf_info->pt_interp_section)->p_memsz  = sizeof(CREW_GLIBC_INTERPRETER);
+    // update section header offset, point PT_INTERP and .interp to our new interpreter string
+    ((Elf64_Ehdr *) exec_in_mem)->e_shoff               = elf_info->size + sizeof(CREW_GLIBC_INTERPRETER) - old_section_header_size;
+    ((Elf64_Phdr *) elf_info->interp_proghdr)->p_offset = elf_info->size - old_section_header_size + 1;
+    ((Elf64_Phdr *) elf_info->interp_proghdr)->p_paddr  = elf_info->size - old_section_header_size + 1;
+    ((Elf64_Phdr *) elf_info->interp_proghdr)->p_vaddr  = elf_info->size - old_section_header_size + 1;
+    ((Elf64_Phdr *) elf_info->interp_proghdr)->p_filesz = sizeof(CREW_GLIBC_INTERPRETER);
+    ((Elf64_Phdr *) elf_info->interp_proghdr)->p_memsz  = sizeof(CREW_GLIBC_INTERPRETER);
+
+    ((Elf64_Shdr *) elf_info->interp_sechdr)->sh_addr   = elf_info->size - old_section_header_size + 1;
+    ((Elf64_Shdr *) elf_info->interp_sechdr)->sh_offset = elf_info->size - old_section_header_size + 1;
+    ((Elf64_Shdr *) elf_info->interp_sechdr)->sh_size   = sizeof(CREW_GLIBC_INTERPRETER);
   } else {
     old_section_header      = exec_in_mem + ((Elf32_Ehdr *) exec_in_mem)->e_shoff;
     old_section_header_size = elf_info->size - ((Elf32_Ehdr *) exec_in_mem)->e_shoff;
 
-    // update section header offset and point PT_INTERP to our new interpreter string
-    ((Elf32_Ehdr *) exec_in_mem)->e_shoff                  = elf_info->size + sizeof(CREW_GLIBC_INTERPRETER) - old_section_header_size;
-    ((Elf32_Phdr *) elf_info->pt_interp_section)->p_offset = elf_info->size - old_section_header_size;
-    ((Elf32_Phdr *) elf_info->pt_interp_section)->p_paddr  = elf_info->size - old_section_header_size;
-    ((Elf32_Phdr *) elf_info->pt_interp_section)->p_vaddr  = elf_info->size - old_section_header_size;
-    ((Elf32_Phdr *) elf_info->pt_interp_section)->p_filesz = sizeof(CREW_GLIBC_INTERPRETER);
-    ((Elf32_Phdr *) elf_info->pt_interp_section)->p_memsz  = sizeof(CREW_GLIBC_INTERPRETER);
+    // update section header offset, point PT_INTERP and .interp to our new interpreter string
+    ((Elf32_Ehdr *) exec_in_mem)->e_shoff               = elf_info->size + sizeof(CREW_GLIBC_INTERPRETER) - old_section_header_size;
+    ((Elf32_Phdr *) elf_info->interp_proghdr)->p_offset = elf_info->size - old_section_header_size + 1;
+    ((Elf32_Phdr *) elf_info->interp_proghdr)->p_paddr  = elf_info->size - old_section_header_size + 1;
+    ((Elf32_Phdr *) elf_info->interp_proghdr)->p_vaddr  = elf_info->size - old_section_header_size + 1;
+    ((Elf32_Phdr *) elf_info->interp_proghdr)->p_filesz = sizeof(CREW_GLIBC_INTERPRETER);
+    ((Elf32_Phdr *) elf_info->interp_proghdr)->p_memsz  = sizeof(CREW_GLIBC_INTERPRETER);
+
+    ((Elf32_Shdr *) elf_info->interp_sechdr)->sh_addr   = elf_info->size - old_section_header_size + 1;
+    ((Elf32_Shdr *) elf_info->interp_sechdr)->sh_offset = elf_info->size - old_section_header_size + 1;
+    ((Elf32_Shdr *) elf_info->interp_sechdr)->sh_size   = sizeof(CREW_GLIBC_INTERPRETER);
   }
 
   if (verbose) fprintf(stderr, "[PID %-7i] %s: New PT_INTERP for %s: %s\n", pid, PROMPT_NAME, exec_path, CREW_GLIBC_INTERPRETER);
@@ -286,7 +328,7 @@ void change_elf_interpreter(char *exec_path, int memfd, void *exec_in_mem, struc
 
   // write modified executable with updated PT_INTERP segment to memfd
   write(memfd, exec_in_mem, elf_info->size - old_section_header_size);
-  write(memfd, CREW_GLIBC_INTERPRETER, sizeof(CREW_GLIBC_INTERPRETER));
+  write(memfd, "\0" CREW_GLIBC_INTERPRETER, sizeof(CREW_GLIBC_INTERPRETER) + 1);
   write(memfd, old_section_header, old_section_header_size);
 
   snprintf(exec_path, PATH_MAX, "/proc/self/fd/%i", memfd);
@@ -441,18 +483,6 @@ int exec_wrapper(const char *path_or_name, char *const *argv, char *const *envp,
       if (memcmp(exec_in_mem, "\x7f""ELF", 4) == 0) {
         elf_info.size = file_info.st_size;
         get_elf_information(exec_in_mem, file_info.st_size, &elf_info);
-
-        // update LD_PRELOAD value if needed
-        envc = unsetenvfp(new_envp, "LD_PRELOAD");
-
-        if (elf_info.is_64bit) {
-          // execute 64-bit binaries with 64-bit version of crew-preload.so
-          asprintf(&new_envp[envc++], "LD_PRELOAD=%s/lib64/crew-preload.so", CREW_PREFIX);
-        } else {
-          asprintf(&new_envp[envc++], "LD_PRELOAD=%s/lib/crew-preload.so", CREW_PREFIX);
-        }
-
-        new_envp[envc] = NULL;
 
         // unset LD_LIBRARY_PATH for system commands, original value will be copied into CREW_PRELOAD_LIBRARY_PATH environment variable
         // (see https://github.com/chromebrew/chromebrew/issues/5777 for more information)
